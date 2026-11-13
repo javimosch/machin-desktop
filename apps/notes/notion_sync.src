@@ -359,32 +359,6 @@ func notion_page_title(p) {
     return "Untitled"
 }
 
-// ---- sync index: page_id -> "file_id|last_edited_time" ----
-
-func notion_index_load() {
-    m := make(map[string]string)
-    src := read_file(index_path())
-    lines := split(src, "\n")
-    i := 0
-    while i < len(lines) {
-        l := lines[i]
-        bar := index(l, "|")
-        if bar > 0 {
-            rest := substr(l, bar + 1, len(l))
-            bar2 := index(rest, "|")
-            if bar2 > 0 { m[substr(l, 0, bar)] = rest }
-        }
-        i = i + 1
-    }
-    return m
-}
-
-func notion_index_save(m) {
-    out := ""
-    for k, v := range m { out = out + k + "|" + v + "\n" }
-    write_file(index_path(), out)
-}
-
 // ---- ISO-8601 -> epoch ms (time_make is local-time; the offset is uniform
 // across all Notion timestamps, so ordering and display stay consistent) ----
 
@@ -428,6 +402,7 @@ func notion_sync_begin() {
 
 func notion_sync_run() {
     idx := notion_index_load()
+    skips := notion_skip_map()
     done := 0
     changed := 0
     cursor := ""
@@ -454,7 +429,8 @@ func notion_sync_run() {
             title := notion_page_title(p)
             ent := idx[p.id]
             parts := split(ent, "|")
-            skip := len(parts) == 2 && parts[1] == p.last_edited_time
+            blocked := skips[p.id] == "1"
+            skip := blocked || (len(parts) == 2 && parts[1] == p.last_edited_time)
             if !skip {
                 fid := str(iso_ms(p.created_time)) + "n" + substr(sha256(p.id), 0, 12)
                 md := "# " + title + "\n\n" + nt_children_md(p.id, 0)
@@ -465,7 +441,7 @@ func notion_sync_run() {
                 changed = changed + 1
             }
             done = done + 1
-            nt_send(1, done, "Importing " + title)
+            if blocked { nt_send(1, done, "Skipping " + title) } else { nt_send(1, done, "Importing " + title) }
             i = i + 1
         }
         hm, _ := json_get(resp, ".has_more")

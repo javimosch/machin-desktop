@@ -111,7 +111,7 @@
         {
           "name": "md_view",
           "sig": "md_view(src string) -> int",
-          "summary": "render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs, <!-- --> comments skipped; inline [label](url) flattened to readable text, **/__//` markers dropped"
+          "summary": "render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs, <!-- --> comments skipped; inline [label](url) flattened to readable text, **/__//` markers dropped; a line containing a link opens its first http(s) URL on click (hover: accent + hand cursor, link-only lines stay accent)"
         }
       ]
     },

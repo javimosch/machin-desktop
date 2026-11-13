@@ -61,6 +61,7 @@
 ├── profile.txt                   # nickname=…  accent=…
 ├── notion.json                   # Notion tokens, mode 600 (after Connect)
 ├── notion-index.txt              # page_id → file_id + last_edited_time
+├── notion-skip.txt               # page ids stopped via "Stop syncing" (optional)
 └── notes/
     ├── 1794566957208.md          # one file per note; the name is its creation time (ms)
     └── 1794569119000n666ff6ccaa5b.md   # imported: &lt;created-ms&gt;n&lt;hash(page_id)&gt;</code></pre>
@@ -76,13 +77,15 @@
       </ol>
       <p>Sync searches every page shared with the integration, fetches each page's blocks recursively (headings, lists, to-dos, quotes, callouts, toggles, code, tables, child pages, links — inline <b>bold</b>/<i>italic</i>/<code>code</code>/strikethrough too), and writes one markdown note per page with a <code>&lt;!-- notion: id=… edited=… --&gt;</code> trailer. Re-sync skips pages whose <code>last_edited_time</code> is unchanged, so it's cheap to run often. Requests are paced under Notion's ~3 req/s limit, expired tokens refresh through the broker, and everything runs on a background goroutine while the UI shows progress.</p>
       <p>The broker is a ~350-line Go sidecar (<a href="https://github.com/javimosch/machin-desktop/tree/master/broker/notion-auth"><code>broker/notion-auth</code></a>) deployed on dk1 behind Traefik; pending logins live in memory for 5 minutes and tokens are single-use.</p>
+      <p><b>Scope and deletion.</b> Sync only ever sees pages you shared with the integration — manage grants Notion-side anytime (page → ⋯ → Connections, or the <b>Manage in Notion</b> button in Settings), then hit <b>Sync now</b>. Deleting a synced note removes only the local <code>.md</code>: the Notion page is untouched (the token is read-only anyway), and it stays deleted until the page is edited in Notion — at which point it re-imports. For a permanent opt-out, delete → <b>Stop syncing</b>: the note is detached (trailer stripped, becomes a normal local note) and its page id goes into <code>notion-skip.txt</code>, which the importer skips forever — removing the id from that file re-enables it.</p>
+      <p><b>Links in the preview.</b> A line containing a markdown link is clickable: it opens the first <code>http(s)</code> URL via <code>xdg-open</code>, shows a hand cursor and turns accent on hover; a line that is just a link stays accent. Mixed-style runs (per-word colors, several links per line) still need host span support.</p>
 
       <h2>How it's built</h2>
       <table>
         <tr><th>file</th><th>what</th></tr>
         <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/app.src"><code>apps/notes/app.src</code></a></td><td>the UI: sidebar, home, notes (list + editor + preview), settings</td></tr>
         <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/data.src"><code>apps/notes/data.src</code></a></td><td>storage: list / read / write <code>.md</code> files, titles, snippets, word counts, profile</td></tr>
-        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/notion.src"><code>apps/notes/notion.src</code></a></td><td>Notion connect: PKCE login via the broker, loopback listener, token file</td></tr>
+        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/notion.src"><code>apps/notes/notion.src</code></a></td><td>Notion connect: PKCE login via the broker, loopback listener, token/index/skip files</td></tr>
         <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/notion_sync.src"><code>apps/notes/notion_sync.src</code></a></td><td>Notion import: page search, recursive blocks, markdown conversion, re-sync</td></tr>
         <tr><td><code>apps/notes/app.conf</code></td><td><code>title=Notes</code> · <code>size=1180x760</code></td></tr>
       </table>
@@ -100,7 +103,7 @@
 
       <h2>Next</h2>
       <ul>
-        <li>Styled inline markdown in the preview (links as accent text, real <b>bold</b>/<code>code</code> runs — needs host span support; today links are flattened to readable text), text selection, soft-wrapped editing.</li>
+        <li>Styled inline markdown in the preview (per-word accent links, several links per line, real <b>bold</b>/<code>code</code> runs — needs host span support; today a link line opens its first URL), text selection, soft-wrapped editing.</li>
         <li>Tags and pinning, from front-matter in the <code>.md</code> files.</li>
         <li>Two-way Notion sync (push edits back), and importing Notion databases as tables.</li>
       </ul>

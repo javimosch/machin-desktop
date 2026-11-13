@@ -154,6 +154,41 @@ func md_inline(s) {
     return out
 }
 
+// first http(s) URL inside a [label](url) construct, "" if none — makes
+// link-bearing lines clickable (the whole element is the hit area)
+func md_link_url(s) {
+    n := len(s)
+    bs := bytes(s)
+    i := 0
+    while i + 2 < n {
+        if byte_at(bs, i) == 93 && byte_at(bs, i + 1) == 40 {
+            j := i + 2
+            k := j
+            while k < n && byte_at(bs, k) != 41 { k = k + 1 }
+            if k < n {
+                u := substr(s, j, k)
+                sp := index(u, " ")
+                if sp > 0 { u = substr(u, 0, sp) }
+                if starts(u, "http") { return u }
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// call after creating a text element for a markdown line: a line that is just
+// a link stays accent; any link line gets accent+hand on hover, click opens it
+func md_maybe_link(el, txt, url) {
+    if url == "" { return }
+    if txt == url { su(el, E_FG, C_ACCENT) }
+    if hovered(el) {
+        su(el, E_FG, C_ACCENT)
+        mdk_cursor(2)
+    }
+    if clicked(el) { _, _, _ := exec("xdg-open '" + url + "'") }
+}
+
 func md_bullet(dot_c) {
     row()
     width(14.0)
@@ -226,16 +261,20 @@ func md_view(src) {
             row()
             fillw()
             md_task(done)
-            para(md_inline(substr(t, 6, len(t))), 14.0)
+            txt := md_inline(substr(t, 6, len(t)))
+            p := para(txt, 14.0)
             grow(1.0)
             if done { fg(C_MUTED) }
+            md_maybe_link(p, txt, md_link_url(t))
             end()
         } else if starts(t, "- ") || starts(t, "* ") {
             row()
             fillw()
             md_bullet(C_ACCENT)
-            para(md_inline(substr(t, 2, len(t))), 14.0)
+            txt := md_inline(substr(t, 2, len(t)))
+            p := para(txt, 14.0)
             grow(1.0)
+            md_maybe_link(p, txt, md_link_url(t))
             end()
         } else if starts(t, "> ") {
             row()
@@ -247,9 +286,11 @@ func md_view(src) {
                 bg(C_ACCENT)
                 radius(1.5)
                 end()
-                para(md_inline(strip_prefix(t, "> ")), 14.0)
+                txt := md_inline(strip_prefix(t, "> "))
+                p := para(txt, 14.0)
                 grow(1.0)
                 fg(C_MUTED)
+                md_maybe_link(p, txt, md_link_url(t))
             end()
         } else if t == "---" || t == "***" {
             divider()
@@ -258,7 +299,9 @@ func md_view(src) {
             height(4.0)
             end()
         } else {
-            para(md_inline(t), 14.0)
+            txt := md_inline(t)
+            p := para(txt, 14.0)
+            md_maybe_link(p, txt, md_link_url(t))
         }
         k = k + 1
     }

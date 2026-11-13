@@ -30,7 +30,7 @@ Generated from framework/guide.json (same data as `./mdk guide`).
 - `text(s string, size float) -> int` — one line of text at size px (shaped with HarfBuzz, cached)
 - `para(s string, size float) -> int` — a paragraph: wraps at spaces to the width its container gives it
 - `label(s string) -> int` — text at the current element's font size
-- `md_view(src string) -> int` — render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs, <!-- --> comments skipped; inline [label](url) flattened to readable text, **/__//` markers dropped
+- `md_view(src string) -> int` — render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs, <!-- --> comments skipped; inline [label](url) flattened to readable text, **/__//` markers dropped; a line containing a link opens its first http(s) URL on click (hover: accent + hand cursor, link-only lines stay accent)
 
 ### widgets
 

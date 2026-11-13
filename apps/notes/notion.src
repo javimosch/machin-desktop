@@ -32,6 +32,85 @@ func token_path() { return data_dir() + "/notion.json" }
 
 func index_path() { return data_dir() + "/notion-index.txt" }
 
+// page ids the user chose to stop syncing, one per line
+func skip_path() { return data_dir() + "/notion-skip.txt" }
+
+// Notion page id from a synced note's "<!-- notion: id=… -->" trailer, "" if the
+// note is local-only (or the trailer was edited away)
+func synced_page_id(src) {
+    marker := "<!-- notion: id="
+    p := index(src, marker)
+    if p <= 0 { return "" }
+    rest := substr(src, p + len(marker), len(src))
+    sp := index(rest, " ")
+    if sp <= 0 { return "" }
+    return substr(rest, 0, sp)
+}
+
+// strip the "<!-- notion: … -->" trailer so a note becomes local-only again
+func notion_detach(src) {
+    p := index(src, "\n<!-- notion: id=")
+    if p < 0 { return src }
+    return substr(src, 0, p) + "\n"
+}
+
+// ---- sync index: page_id -> "file_id|last_edited_time" ----
+
+func notion_index_load() {
+    m := make(map[string]string)
+    src := read_file(index_path())
+    lines := split(src, "\n")
+    i := 0
+    while i < len(lines) {
+        l := lines[i]
+        bar := index(l, "|")
+        if bar > 0 {
+            rest := substr(l, bar + 1, len(l))
+            bar2 := index(rest, "|")
+            if bar2 > 0 { m[substr(l, 0, bar)] = rest }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+func notion_index_save(m) {
+    out := ""
+    for k, v := range m { out = out + k + "|" + v + "\n" }
+    write_file(index_path(), out)
+}
+
+func notion_index_remove(pid) {
+    if pid == "" { return }
+    m := notion_index_load()
+    m2 := make(map[string]string)
+    for k, v := range m {
+        if k != pid { m2[k] = v }
+    }
+    notion_index_save(m2)
+}
+
+// pages the user stopped syncing: ids in notion-skip.txt are never imported,
+// and dropping the index entry means removing the id re-imports the page
+func notion_skip_map() {
+    m := make(map[string]string)
+    lines := split(read_file(skip_path()), "\n")
+    i := 0
+    while i < len(lines) {
+        if lines[i] != "" { m[lines[i]] = "1" }
+        i = i + 1
+    }
+    return m
+}
+
+func notion_skip_add(pid) {
+    if pid == "" { return }
+    cur := read_file(skip_path())
+    if cur != "" && !ends(cur, "\n") { cur = cur + "\n" }
+    if index(cur, pid + "\n") >= 0 { return }
+    write_file(skip_path(), cur + pid + "\n")
+}
+
 // base64url without padding, for the PKCE verifier/challenge pair.
 func b64url(bs) {
     s := base64_encode_bytes(bs)
@@ -199,6 +278,7 @@ func notion_poll() {
 func notion_disconnect() {
     remove(token_path())
     remove(index_path())
+    remove(skip_path())
     set_str("nt:ws", "")
     set_str("nt:err", "")
     set_str("nt:prog", "")
@@ -227,6 +307,9 @@ func notion_settings_card() {
                     if ls != "" { text("last sync " + ago(int(parse_float(ls))), 12.0)  fg(0x6A6A78FF) }
                 }
                 if button_ghost("Disconnect") { notion_disconnect() }
+                if button_ghost("Manage in Notion") {
+                    _, _, _ := exec("xdg-open 'https://www.notion.so/profile/connections'")
+                }
             end()
         } else {
             text("Import pages from a Notion workspace you share with the integration.", 14.0)

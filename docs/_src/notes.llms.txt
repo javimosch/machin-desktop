@@ -13,7 +13,9 @@ A micro-SaaS-style desktop dashboard for personal markdown notes, built with mdk
 - Notes: searchable list (titles + contents), editor (text_area) with Edit / Split / Preview modes, live md_view preview, two-step delete
 - Autosave: every edit writes the note's .md file
 - Settings: nickname (text_field) with generated avatar, accent color swatches theming the app, storage path
-- Notion: Connect Notion (OAuth via broker), Sync now, Disconnect, live progress
+- Notion: Connect Notion (OAuth via broker), Sync now, Disconnect, Manage in Notion (opens Notion connections page), live progress
+- Preview links: a markdown line containing a link opens its first http(s) URL via xdg-open (hover = accent + hand cursor; link-only lines stay accent)
+- Synced-note delete: "Delete local copy" removes only the .md (page stays in Notion, re-imports if edited there); "Stop syncing" detaches the note (strips the trailer) and adds the page id to notion-skip.txt so it never re-imports
 - Shortcuts: ctrl+n new note, ctrl+v paste, ctrl+Backspace delete word, Esc leaves a field
 
 ## Notion import
@@ -25,7 +27,7 @@ Settings → Connect Notion runs OAuth against the notes-auth broker (https://no
 3. Broker exchanges the code server-side (client secret never in the app) and redirects the browser to 127.0.0.1:<port>/cb?nonce=N — token never in a URL
 4. App POSTs /notion/claim {nonce, verifier} → token JSON once → notion.json (mode 600) → auto-sync
 
-Sync (background goroutine, ~2.5 req/s): POST /v1/search (shared pages) → per page GET /v1/blocks/{id}/children recursively → markdown (headings, lists, todos, quotes, callouts, toggles, code, tables, child pages, links, inline bold/italic/code/strike) → one .md per page named <created-ms>n<sha256(page_id)[:12]>.md with a <!-- notion: id=… edited=… --> trailer. notion-index.txt maps page_id → file_id|last_edited_time; unchanged pages are skipped on re-sync. Token refresh goes through broker /notion/refresh (secret stays server-side).
+Sync (background goroutine, ~2.5 req/s): POST /v1/search (shared pages) → per page GET /v1/blocks/{id}/children recursively → markdown (headings, lists, todos, quotes, callouts, toggles, code, tables, child pages, links, inline bold/italic/code/strike) → one .md per page named <created-ms>n<sha256(page_id)[:12]>.md with a <!-- notion: id=… edited=… --> trailer. notion-index.txt maps page_id → file_id|last_edited_time; unchanged pages are skipped on re-sync. notion-skip.txt (one page id per line) excludes pages permanently — written by "Stop syncing". Token refresh goes through broker /notion/refresh (secret stays server-side).
 
 Env hooks for testing: MDK_NOTES_DIR (data dir), MDK_NOTES_SYNC=1 (sync on boot), MDK_NOTES_CONNECT=1 (start OAuth on boot), MDK_NOTES_OPEN=<note-id> (open a note on boot), MDK_NOTES_MODE=edit|split|preview, MDK_NOTION_API (override API base, e.g. http://127.0.0.1:8399/v1 for the mock). Mock server: apps/notes/mock_notion.py.
 
@@ -36,6 +38,7 @@ $MDK_NOTES_DIR (default ~/.local/share/mdk-notes)/
   profile.txt            nickname=... / accent=<rgba int>
   notion.json            Notion tokens, mode 600 (after Connect)
   notion-index.txt       page_id|file_id|last_edited_time per line
+  notion-skip.txt        page ids excluded from sync (optional, "Stop syncing")
   notes/<created-ms>.md  one file per note; title = first line without leading #
   notes/<created-ms>n<hash>.md  imported Notion pages
 ```
@@ -46,7 +49,7 @@ Titles / word counts / snippets cached in the host state store, versioned by a c
 
 - apps/notes/app.src — UI (sidebar, home, notes, settings)
 - apps/notes/data.src — storage (list_dir/read_file/write_file/remove), title/snippet/word count, profile
-- apps/notes/notion.src — OAuth connect flow, loopback listener, token store
+- apps/notes/notion.src — OAuth connect flow, loopback listener, token/index/skip files, synced-page helpers
 - apps/notes/notion_sync.src — Notion API client, block→markdown, sync orchestration
 - apps/notes/mock_notion.py — mock Notion API for offline importer testing
 - apps/notes/app.conf — title=Notes, size=1180x760
@@ -81,4 +84,4 @@ cat /tmp/mdk-nt/notes/*.md /tmp/mdk-nt/notion-index.txt
 
 ## Next
 
-Two-way Notion sync (push edits back), Notion databases as tables, styled inline markdown in preview (accent links, bold/code runs — needs host span support; md_inline currently flattens to plain text), text selection, soft-wrap editing, tags/pinning via front-matter.
+Two-way Notion sync (push edits back), Notion databases as tables, styled inline markdown in preview (per-word accent links, several links per line, bold/code runs — needs host span support; today a link line opens its first URL via xdg-open), text selection, soft-wrap editing, tags/pinning via front-matter.

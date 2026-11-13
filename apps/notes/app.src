@@ -323,12 +323,29 @@ func editor() {
                 mode_button("Preview", "preview")
             end()
             if state_int("confirm_del", 0) == 1 {
-                if button_styled("Confirm delete", C_DANGER, 0xF2555AFF, 0xC93C41FF) {
+                csrc := state_str("buf", "")
+                csynced := contains(csrc, "<!-- notion: id=")
+                if csynced {
+                    text("notion · synced", 11.0)
+                    fg(0x6A6A78FF)
+                }
+                clbl := "Confirm delete"
+                if csynced { clbl = "Delete local copy" }
+                if button_styled(clbl, C_DANGER, 0xF2555AFF, 0xC93C41FF) {
                     delete_note(sel)
                     set_str("sel", "")
                     set_int("confirm_del", 0)
                     ids := note_ids()
                     if len(ids) > 0 { open_note(ids[0]) }
+                }
+                if csynced {
+                    if button_ghost("Stop syncing") {
+                        pid := synced_page_id(csrc)
+                        notion_skip_add(pid)
+                        notion_index_remove(pid)
+                        write_file(note_path(sel), notion_detach(csrc))
+                        open_note(sel)
+                    }
                 }
                 if button_ghost("Cancel") { set_int("confirm_del", 0) }
             } else {
