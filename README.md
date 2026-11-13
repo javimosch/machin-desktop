@@ -230,7 +230,8 @@ MDK_SCENE=grid ./mdk shot examples/bench /tmp/g.ppm --size 800 600 --frames 30
 - [x] **M1** — MFL UI core, SDL3/GL host, one-draw-call renderer, hot reload with kept state, error overlay
 - [x] **M2** — MyGo's benchmark scenes side by side: shaping cache, word wrap, bold, virtual list, culling, zero-wake idle
 - [x] **M2.5** — driven by the Notes app: text input (UTF-8/IME via SDL), focus, single- and multi-line editing, clipping, scroll views, overlays, cursors, app.conf, scripted input for tests
-- [ ] **M2.6** — Notes: import from Notion; text selection, soft-wrap editing, inline markdown marks
+- [x] **M2.6** — Notes: Notion OAuth connect (broker sidecar) + background importer with changed-only resync; font coverage probe (tofu fix); md_view flattens inline links/marks
+- [ ] **M2.7** — text selection, soft-wrap editing, styled inline markdown (accent links, bold/code runs — needs host span support)
 - [ ] **M3** — inspector: click an element → its MFL `file:line` (agent-ready); widget set (checkbox, select, slider, table)
 - [ ] **M4** — webview windows (machweb + reactive wasm), menus / tray / dialogs, `SDL_gpu` backend, macOS + Windows builds, benchmarks on a Mac against MyGo's published numbers
 

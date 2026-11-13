@@ -81,7 +81,7 @@ cat /tmp/mdk-nt/notes/*.md /tmp/mdk-nt/notion-index.txt
 
 ## Next
 
-Two-way Notion sync (push edits back), Notion databases as tables, text selection, soft-wrap editing, inline marks in preview, tags/pinning via front-matter.
+Two-way Notion sync (push edits back), Notion databases as tables, styled inline markdown in preview (accent links, bold/code runs — needs host span support; md_inline currently flattens to plain text), text selection, soft-wrap editing, tags/pinning via front-matter.
 
 ---
 HTML: https://javimosch.github.io/machin-desktop/notes/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

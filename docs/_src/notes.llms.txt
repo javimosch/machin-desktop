@@ -27,7 +27,7 @@ Settings → Connect Notion runs OAuth against the notes-auth broker (https://no
 
 Sync (background goroutine, ~2.5 req/s): POST /v1/search (shared pages) → per page GET /v1/blocks/{id}/children recursively → markdown (headings, lists, todos, quotes, callouts, toggles, code, tables, child pages, links, inline bold/italic/code/strike) → one .md per page named <created-ms>n<sha256(page_id)[:12]>.md with a <!-- notion: id=… edited=… --> trailer. notion-index.txt maps page_id → file_id|last_edited_time; unchanged pages are skipped on re-sync. Token refresh goes through broker /notion/refresh (secret stays server-side).
 
-Env hooks for testing: MDK_NOTES_DIR (data dir), MDK_NOTES_SYNC=1 (sync on boot), MDK_NOTES_CONNECT=1 (start OAuth on boot), MDK_NOTION_API (override API base, e.g. http://127.0.0.1:8399/v1 for the mock). Mock server: apps/notes/mock_notion.py.
+Env hooks for testing: MDK_NOTES_DIR (data dir), MDK_NOTES_SYNC=1 (sync on boot), MDK_NOTES_CONNECT=1 (start OAuth on boot), MDK_NOTES_OPEN=<note-id> (open a note on boot), MDK_NOTES_MODE=edit|split|preview, MDK_NOTION_API (override API base, e.g. http://127.0.0.1:8399/v1 for the mock). Mock server: apps/notes/mock_notion.py.
 
 ## Storage
 
@@ -81,4 +81,4 @@ cat /tmp/mdk-nt/notes/*.md /tmp/mdk-nt/notion-index.txt
 
 ## Next
 
-Two-way Notion sync (push edits back), Notion databases as tables, text selection, soft-wrap editing, inline marks in preview, tags/pinning via front-matter.
+Two-way Notion sync (push edits back), Notion databases as tables, styled inline markdown in preview (accent links, bold/code runs — needs host span support; md_inline currently flattens to plain text), text selection, soft-wrap editing, tags/pinning via front-matter.

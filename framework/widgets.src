@@ -110,11 +110,49 @@ func badge(s, c) {
 
 // ---- markdown ----
 // Block-level markdown: # ## ### headings, - * bullets, - [ ] / - [x]
-// tasks, > quotes, ``` code fences, --- rules, paragraphs. Inline marks
-// (**bold**, `code`, links) are shown as typed for now.
+// tasks, > quotes, ``` code fences, --- rules, paragraphs, <!-- --> comments
+// (skipped). Inline marks are flattened by md_inline (see below).
 func strip_prefix(s, p) { return substr(s, len(p), len(s)) }
 
 func starts(s, p) { return len(s) >= len(p) && substr(s, 0, len(p)) == p }
+
+// Flatten inline markdown to readable plain text: [label](url) becomes
+// "url" when label==url else "label (url)", and **/__/` markers are dropped.
+// Whole-line styles only — mixed-style runs need host span support.
+func md_inline(s) {
+    if !contains(s, "[") && !contains(s, "**") && !contains(s, "__") && !contains(s, "`") { return s }
+    out := ""
+    i := 0
+    n := len(s)
+    bs := bytes(s)
+    while i < n {
+        linked := false
+        if byte_at(bs, i) == 91 {
+            j := i + 1
+            while j + 1 < n && !(byte_at(bs, j) == 93 && byte_at(bs, j + 1) == 40) { j = j + 1 }
+            if j + 1 < n {
+                k := j + 2
+                while k < n && byte_at(bs, k) != 41 { k = k + 1 }
+                if k < n {
+                    label := substr(s, i + 1, j)
+                    url := substr(s, j + 2, k)
+                    if label == "" { label = url }
+                    if label == url { out = out + url } else { out = out + label + " (" + url + ")" }
+                    i = k + 1
+                    linked = true
+                }
+            }
+        }
+        if !linked {
+            out = out + substr(s, i, i + 1)
+            i = i + 1
+        }
+    }
+    out = replace(out, "**", "")
+    out = replace(out, "__", "")
+    out = replace(out, "`", "")
+    return out
+}
 
 func md_bullet(dot_c) {
     row()
@@ -175,20 +213,20 @@ func md_view(src) {
             text(l, 13.0)
             fg(0xB8E0C8FF)
         } else if starts(t, "### ") {
-            para(strip_prefix(t, "### "), 16.0)
+            para(md_inline(strip_prefix(t, "### ")), 16.0)
             bold()
         } else if starts(t, "## ") {
-            para(strip_prefix(t, "## "), 20.0)
+            para(md_inline(strip_prefix(t, "## ")), 20.0)
             bold()
         } else if starts(t, "# ") {
-            para(strip_prefix(t, "# "), 26.0)
+            para(md_inline(strip_prefix(t, "# ")), 26.0)
             bold()
         } else if starts(t, "- [ ] ") || starts(t, "- [x] ") || starts(t, "- [X] ") {
             done := !starts(t, "- [ ] ")
             row()
             fillw()
             md_task(done)
-            para(substr(t, 6, len(t)), 14.0)
+            para(md_inline(substr(t, 6, len(t))), 14.0)
             grow(1.0)
             if done { fg(C_MUTED) }
             end()
@@ -196,7 +234,7 @@ func md_view(src) {
             row()
             fillw()
             md_bullet(C_ACCENT)
-            para(substr(t, 2, len(t)), 14.0)
+            para(md_inline(substr(t, 2, len(t))), 14.0)
             grow(1.0)
             end()
         } else if starts(t, "> ") {
@@ -209,18 +247,18 @@ func md_view(src) {
                 bg(C_ACCENT)
                 radius(1.5)
                 end()
-                para(strip_prefix(t, "> "), 14.0)
+                para(md_inline(strip_prefix(t, "> ")), 14.0)
                 grow(1.0)
                 fg(C_MUTED)
             end()
         } else if t == "---" || t == "***" {
             divider()
-        } else if t == "" {
+        } else if t == "" || starts(t, "<!--") {
             row()
             height(4.0)
             end()
         } else {
-            para(t, 14.0)
+            para(md_inline(t), 14.0)
         }
         k = k + 1
     }

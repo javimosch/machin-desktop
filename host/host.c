@@ -709,8 +709,27 @@ static const char* find_font(void) {
         "/System/Library/Fonts/SFNS.ttf",
         "C:\\Windows\\Fonts\\segoeui.ttf",
     };
-    for (size_t k = 0; k < sizeof known / sizeof *known; k++)
-        if (access(known[k], R_OK) == 0) return known[k];
+    const size_t nk = sizeof known / sizeof *known;
+    const char* first = NULL;
+    for (size_t k = 0; k < nk; k++)
+        if (access(known[k], R_OK) == 0) { first = known[k]; break; }
+    /* Coverage probe: the first candidate wins only if its cmap has the
+       punctuation real documents use (⇒ — …). Ubuntu's font lacks them and
+       every such char renders as a tofu rectangle; DejaVu covers them. If no
+       candidate covers the set, fall back to `first` (today's behaviour). */
+    FT_Library probe = NULL;
+    if (FT_Init_FreeType(&probe) == 0) {
+        for (size_t k = 0; k < nk; k++) {
+            if (access(known[k], R_OK) != 0) continue;
+            FT_Face tf = NULL;
+            if (FT_New_Face(probe, known[k], 0, &tf)) continue;
+            int ok = FT_Get_Char_Index(tf, 0x21D2) && FT_Get_Char_Index(tf, 0x2014) && FT_Get_Char_Index(tf, 0x2026);
+            FT_Done_Face(tf);
+            if (ok) { FT_Done_FreeType(probe); return known[k]; }
+        }
+        FT_Done_FreeType(probe);
+    }
+    if (first) return first;
     static char path[1024];
     FILE* p = popen("fc-match -f '%{file}' sans-serif 2>/dev/null", "r");
     if (p) { size_t n = fread(path, 1, sizeof path - 1, p); path[n] = 0; pclose(p); if (n) return path; }

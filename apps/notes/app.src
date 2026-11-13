@@ -14,6 +14,8 @@ func boot() {
     notion_refresh_state()
     if env("MDK_NOTES_SYNC") == "1" && notion_connected() { notion_sync_begin() }
     if env("MDK_NOTES_CONNECT") == "1" && !notion_connected() { notion_begin() }
+    if env("MDK_NOTES_OPEN") != "" { open_note(env("MDK_NOTES_OPEN")) }
+    if env("MDK_NOTES_MODE") != "" { set_str("mode", env("MDK_NOTES_MODE")) }
     if state_str("nick", "") == "" { set_str("nick", "Friend") }
     if len(note_ids()) == 0 { seed_welcome() }
 }

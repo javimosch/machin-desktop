@@ -55,7 +55,7 @@
 <tr><td><code>text(s string, size float) -&gt; int</code></td><td>one line of text at size px (shaped with HarfBuzz, cached)</td></tr>
 <tr><td><code>para(s string, size float) -&gt; int</code></td><td>a paragraph: wraps at spaces to the width its container gives it</td></tr>
 <tr><td><code>label(s string) -&gt; int</code></td><td>text at the current element&#x27;s font size</td></tr>
-<tr><td><code>md_view(src string) -&gt; int</code></td><td>render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, &gt; quotes, ``` code fences, --- rules, paragraphs (inline marks shown as typed)</td></tr>
+<tr><td><code>md_view(src string) -&gt; int</code></td><td>render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, &gt; quotes, ``` code fences, --- rules, paragraphs, &lt;!-- --&gt; comments skipped; inline [label](url) flattened to readable text, **/__//` markers dropped</td></tr>
 </table>
 <h3 id="widgets">widgets</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
