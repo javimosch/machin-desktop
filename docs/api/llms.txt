@@ -1,0 +1,100 @@
+# mdk API reference (v0.2.0)
+
+Generated from framework/guide.json (same data as `./mdk guide`).
+
+## App contract
+
+1. An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).
+2. Define exactly one `func view()`. It runs every frame that needs drawing (input, resize, reload, or animate()).
+3. Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame's temporaries are freed when it returns.
+4. Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).
+5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
+6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
+7. Widgets return their event for this frame: if button("Save") { ... }.
+
+## Functions
+
+### containers
+
+- `col() -> int` — open a vertical container (children top to bottom); returns its element index
+- `row() -> int` — open a horizontal container (children left to right)
+- `end()` — close the innermost open container; following modifiers target it
+- `spacer() -> int` — an empty element with grow 1: pushes siblings apart
+- `vlist(n int, row_h float, scroll float) -> (first int, count int)` — open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()
+
+### content
+
+- `text(s string, size float) -> int` — one line of text at size px (shaped with HarfBuzz, cached)
+- `para(s string, size float) -> int` — a paragraph: wraps at spaces to the width its container gives it
+- `label(s string) -> int` — text at the current element's font size
+
+### widgets
+
+- `button(s string) -> bool` — accent button; true on the frame it is clicked (press and release inside)
+- `button_ghost(s string) -> bool` — outlined surface button; same semantics
+- `button_styled(s string, base int, hover int, pressed int) -> bool` — button with your own three colors
+
+### layout
+
+- `fill()` — take all space on both axes (grow on the main axis, stretch on the cross axis)
+- `fillw()` — take all horizontal space
+- `fillh()` — take all vertical space
+- `width(px float)` — fixed width
+- `height(px float)` — fixed height
+- `size(w float, h float)` — fixed width and height
+- `pad(px float)` — padding on all sides
+- `padxy(x float, y float)` — horizontal and vertical padding
+- `gap(px float)` — space between children
+- `grow(f float)` — share of the free main-axis space
+- `align(A_START|A_CENTER|A_STRETCH|A_END)` — children's cross-axis alignment
+- `justify(J_START|J_CENTER|J_END|J_BETWEEN)` — children's main-axis distribution (when nothing grows)
+- `center()` — align + justify center
+- `scroll_y(px float)` — offset a vertical container's content by px
+
+### style
+
+- `bg(rgba int)` — background color, 0xRRGGBBAA
+- `fg(rgba int)` — text color (inherited by children)
+- `font(px float)` — font size (inherited)
+- `bold()` — bold face (inherited)
+- `radius(px float)` — corner radius (SDF, crisp at any scale)
+- `border(px float, rgba int)` — inside border
+- `shadow(blur float, rgba int)` — soft drop shadow
+
+### state (survives hot reload)
+
+- `state_int(key string, default int) -> int` — read a host-owned int (default on first read)
+- `set_int(key string, v int)` — write it
+- `state_f(key string, default float) -> float` — float variant
+- `set_f(key string, v float)` — write it
+- `state_str(key string, default string) -> string` — string variant
+- `set_str(key string, v string)` — write it
+
+### input & time
+
+- `hovered(i int) -> bool` — pointer is over element i (last frame's layout)
+- `pressed(i int) -> bool` — button held after a press that started on i
+- `clicked(i int) -> bool` — released this frame on i after pressing on i
+- `frame_no() -> int` — frames drawn since start
+- `animate()` — ask for another frame right away (otherwise the app sleeps until input)
+
+### format
+
+- `fmt2(v float) -> string` — two decimals, as Go's %.2f
+
+## Colors
+
+Ints 0xRRGGBBAA. Theme: C_BG, C_SURFACE, C_TEXT, C_MUTED, C_ACCENT (C_ACCENT_HI, C_ACCENT_LO), C_BORDER.
+
+## Gotchas
+
+- machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).
+- MFL loops are `while cond { }`; there is no C-style for. Floats need a dot (16.0); int->float is float(i).
+- Struct types are `type T struct { ... }` with one field per line.
+- Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).
+- Modifiers apply to the last element: call them right after the element (or right after end() for a container).
+- Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.
+- To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it.
+
+---
+HTML: https://javimosch.github.io/machin-desktop/api/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

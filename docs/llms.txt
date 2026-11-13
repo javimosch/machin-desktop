@@ -1,0 +1,61 @@
+# mdk — machin desktop kit
+
+> Native desktop apps in machin (MFL): GPUI-style GPU UI in one draw call per frame, hot reload that keeps state.
+
+Each page of the docs has its own llms.txt; fetch only what the task needs.
+Repository: https://github.com/javimosch/machin-desktop · agent skill: https://github.com/javimosch/machin-desktop/blob/master/SKILL.md · machine-readable API: `./mdk guide` (JSON).
+
+## Pages
+
+- [Getting started](https://javimosch.github.io/machin-desktop/guide/llms.txt): Install, first app, state, dev loop, release builds, project layout.
+- [Layout & styling](https://javimosch.github.io/machin-desktop/layout/llms.txt): Elements, modifiers, the flexbox rules, wrapping text, virtual lists, scrolling.
+- [Hot reload that keeps state](https://javimosch.github.io/machin-desktop/hot-reload/llms.txt): How dev reload works, what survives it, the arena rule, the error overlay, its limits.
+- [Benchmarks: mdk vs MyGo](https://javimosch.github.io/machin-desktop/benchmarks/llms.txt): MyGo's own scenes, same machine, both on the GPU — numbers, method, caveats, how to reproduce.
+- [API reference](https://javimosch.github.io/machin-desktop/api/llms.txt): Every framework function: containers, content, widgets, layout, style, state, input, format.
+- [Internals](https://javimosch.github.io/machin-desktop/internals/llms.txt): Host ABI, element records, the one-call renderer, text shaping cache, memory model.
+- [Building mdk apps with an agent](https://javimosch.github.io/machin-desktop/agents/llms.txt): llms.txt, SKILL.md and `mdk guide`: everything a coding agent needs to build an mdk app first try.
+
+## What mdk is
+
+mdk (machin desktop kit) builds native desktop apps in machin (MFL). The UI is a
+function of state run every frame (`func view()`), laid out by a small flexbox
+written in MFL, and drawn on the GPU in one instanced draw call per frame by a
+C host (SDL3 + OpenGL 3.3, HarfBuzz text). In development the app is a shared
+object the host reloads on every save: the window stays open and state kept in
+the host store (`state_int`/`set_int`, ...) survives.
+
+## Minimal app
+
+```
+func view() {
+    n := state_int("count", 0)
+    col()
+    fill()
+    center()
+    gap(16.0)
+        text(str(n), 56.0)
+        bold()
+        row()
+        gap(10.0)
+            if button("Increment") { set_int("count", n + 1) }
+            if button_ghost("Reset") { set_int("count", 0) }
+        end()
+    end()
+}
+```
+
+## Commands
+
+- `./mdk new <appdir>` — scaffold an app directory with app.src (a counter)
+- `./mdk dev <appdir>` — build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame
+- `./mdk build <appdir> [-o out]` — one release binary with the app linked in (no reload, sleeps when idle)
+- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...` — render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view
+- `./mdk check <appdir>` — typecheck the app with the framework (machin encode), no window
+- `./mdk guide` — print this JSON
+
+## Headline numbers (MyGo's own benchmark scenes, same Linux laptop, both on GPU)
+
+- CPU per frame: list 0.48 vs 2.83 ms, grid 3.9 vs 37.6 ms, document 0.52 vs 35.9 ms
+- grid/document: mdk holds 60 fps, MyGo ~19-21 fps
+- release binary 2.6 MB vs 10.1 MB; memory at rest 76.5 vs 116 MB
+- one machine (i5-11320H, Mesa, X11); MyGo's own Apple M5 numbers are much faster than here

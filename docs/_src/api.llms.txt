@@ -1,0 +1,19 @@
+# mdk API reference (v{{version}})
+
+Generated from framework/guide.json (same data as `./mdk guide`).
+
+## App contract
+
+{{contract_md}}
+
+## Functions
+
+{{api_md}}
+
+## Colors
+
+Ints 0xRRGGBBAA. Theme: C_BG, C_SURFACE, C_TEXT, C_MUTED, C_ACCENT (C_ACCENT_HI, C_ACCENT_LO), C_BORDER.
+
+## Gotchas
+
+{{gotchas_md}}

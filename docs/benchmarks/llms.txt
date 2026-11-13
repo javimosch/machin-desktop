@@ -1,0 +1,47 @@
+# mdk vs MyGo benchmarks
+
+MyGo's own comparison scenes (github.com/egoist/mygo benchmarks/), same machine, both verified on the GPU.
+Machine: Intel i5-11320H (Xe), Ubuntu 22.04, Mesa, X11, 60 Hz. 3 rounds, medians. MyGo d5c76cf (0.9.0).
+Raw: https://github.com/javimosch/machin-desktop/blob/master/bench/results-linux.json
+
+| scene | measure | mdk | MyGo |
+|---|---|---|---|
+| - | release binary | 2.6 MB | 10.1 MB |
+| counter | startup to first frame | 283 ms | 506 ms (5 runs, noisy) |
+| counter | memory at rest | 76.5 MB | 116.1 MB |
+| counter | CPU at rest | 0.00% | 0.00% |
+| list (100k rows, scroll 8px/frame) | CPU per frame | 0.48 ms | 2.83 ms |
+| list | fps / p99 | 60.0 / 20.7 ms | 59.5 / 28.1 ms |
+| list | peak memory | 77 MB | 123 MB |
+| grid (600 live cells) | CPU per frame | 3.9 ms | 37.6 ms |
+| grid | fps / p99 | 60.0 / 21.2 ms | 18.8 / 91.5 ms |
+| grid | peak memory | 78 MB | 147 MB |
+| document (20k chars rewrapped/frame) | CPU per frame | 0.52 ms | 35.9 ms |
+| document | fps / p99 | 60.0 / 20.0 ms | 21.0 / 89.7 ms |
+| document | peak memory | 83 MB | 144 MB |
+
+## Method
+
+- Scenes transcribed line by line from MyGo's benchmarks/mygo/main.go into examples/bench/app.src (same LCG word generator, values, colors, sizes, 360x260 / 800x600 windows).
+- bench/run.py (Linux port of MyGo's macOS-only runner): CPU = utime+stime of all threads from /proc between the app's "start" and "done" lines / frames; memory = VmRSS at rest, VmHWM peak.
+- Both apps print `ready` (first frame on screen), `start` (after 120 warmup frames), `done {frames,wallUs,p50Us,p99Us,maxUs}` (after 600 frames).
+- Counter: RSS 5 s after ready, then CPU over 5 s. One unmeasured launch each first; order alternates per round.
+- GPU verified: MYGO_FRAME_STATS=all -> "drawn on the GPU: 4133 instances in 1 batches".
+
+## Caveats
+
+- One laptop. MyGo's own Apple M5 numbers: grid 5.7 ms, document 4.9 ms. Here MyGo spends layout 34-42 ms/frame (600 pure-Go text layouts). mdk caches HarfBuzz runs and only re-wraps.
+- Empty SDL3+GL window on this Mesa = 66 MB floor; mdk's own share ~11 MB. MyGo on Linux carries GTK.
+- p99 ~20 ms on both = X11 compositor jitter.
+- Breadth not measured: MyGo has ~80 widgets, a11y, IME, RTL, menus, webview, installers, auto-update.
+
+## Reproduce
+
+```
+CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector -ldflags "-s -w -X github.com/egoist/mygo.production=1" -o /tmp/bench-mygo ./benchmarks/mygo
+./mdk build examples/bench -o build/bench-release
+DISPLAY=:0 python3 bench/run.py --mygo /tmp/bench-mygo --mdk build/bench-release --runs 3
+```
+
+---
+HTML: https://javimosch.github.io/machin-desktop/benchmarks/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

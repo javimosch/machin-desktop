@@ -1,0 +1,48 @@
+    <section class="hero">
+      <img class="logo" src="assets/logo.png" alt="mdk">
+      <div class="eyebrow">machin desktop kit · v{{version}} · experimental</div>
+      <h1>Native desktop apps in machin.<br>One draw call. State that survives every edit.</h1>
+      <p class="lead">A typed, GPUI-style UI written in <a href="https://github.com/javimosch/machin">machin</a> (MFL), drawn on the GPU in a single instanced draw per frame — with hot reload that keeps the window open and your state intact while you edit.</p>
+      <div class="cta">
+        <a class="btn primary" href="guide/">Get started →</a>
+        <a class="btn ghost" href="benchmarks/">See the benchmarks</a>
+        <a class="btn ghost" href="https://github.com/javimosch/machin-desktop">GitHub</a>
+      </div>
+    </section>
+
+    <img class="shot" src="assets/scenes.png" alt="mdk rendering MyGo's four benchmark scenes: counter, 100k-row list, live 600-cell grid, wrapped document">
+
+    <div class="stats">
+      <div class="stat"><div class="v">6–69×</div><div class="k">less CPU per frame than MyGo, on MyGo's own scenes</div></div>
+      <div class="stat"><div class="v">60 fps</div><div class="k">steady where MyGo drops to ~20 (grid, document)</div></div>
+      <div class="stat"><div class="v">2.6 MB</div><div class="k">release binary — 3.9× smaller than MyGo's</div></div>
+      <div class="stat"><div class="v">0.3 ms</div><div class="k">to swap in a rebuilt view, state kept</div></div>
+    </div>
+
+    <h2>The whole app</h2>
+    <div class="doc">
+      <pre><code>{{example_html}}</code></pre>
+      <p>The view is a function of state, run every frame. <code>state_int</code> reads a value owned by the host process — so it survives every reload. <code>button()</code> returns <code>true</code> on the frame it is clicked. That's the model; <a href="layout/">layout</a> covers the rest.</p>
+      <pre><code>./mdk new apps/hello      # scaffold
+./mdk dev apps/hello      # window opens; edit app.src and save — it redraws in place
+./mdk build apps/hello    # one 2.6 MB release binary</code></pre>
+    </div>
+
+    <h2>Hot reload that keeps state</h2>
+    <img class="shot" src="assets/hot-reload.png" alt="Running at 2; edited while running, still 2; a type error drawn over the last good frame">
+    <p class="muted">Running at 2 → restyled while running, still 2 → a type error, drawn over the last good frame instead of a blank window. <a href="hot-reload/">How it works →</a></p>
+
+    <h2>Faster than MyGo on MyGo's own benchmarks</h2>
+    <img src="assets/bench.svg" alt="mdk vs MyGo bar chart">
+    <p class="muted">Same laptop, same scenes, both verified on the GPU. One machine — read the <a href="benchmarks/">caveats and method</a>.</p>
+
+    <h2>Docs</h2>
+    <div class="cards">
+      <a class="card" href="guide/"><h3>Guide</h3><p>Install, first app, state, the dev loop, release builds.</p></a>
+      <a class="card" href="layout/"><h3>Layout &amp; styling</h3><p>Elements, modifiers, flexbox rules, wrapping, virtual lists.</p></a>
+      <a class="card" href="hot-reload/"><h3>Hot reload</h3><p>What survives a reload, the arena rule, the error overlay.</p></a>
+      <a class="card" href="benchmarks/"><h3>Benchmarks</h3><p>mdk vs MyGo: numbers, method, caveats, reproduce.</p></a>
+      <a class="card" href="api/"><h3>API reference</h3><p>Every framework function, generated from <code>mdk guide</code>.</p></a>
+      <a class="card" href="internals/"><h3>Internals</h3><p>Host ABI, element records, the one-call renderer, text cache.</p></a>
+      <a class="card" href="agents/"><h3>For agents</h3><p>llms.txt on every page, SKILL.md, and <code>mdk guide</code> JSON.</p></a>
+    </div>

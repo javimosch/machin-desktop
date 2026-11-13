@@ -1,0 +1,51 @@
+    <div class="doc">
+      <div class="eyebrow">Hot reload</div>
+      <h1>Hot reload that keeps state</h1>
+      <p class="lead">Save a file and the running window redraws with the new code — same window, same size, same state. A broken edit never blanks the window.</p>
+
+      <img class="shot" src="{{up}}assets/hot-reload.png" alt="Running at 2; edited while running, still 2; type error over the last good frame">
+      <p class="muted">Left: running, clicked twice. Middle: font size, color, caption and gap changed while running — still 2. Right: a typo, drawn over the last good frame.</p>
+
+      <h2>What happens on save</h2>
+      <ol>
+        <li><code>mdk dev</code> notices a changed <code>.src</code> (app or framework; polled every 250 ms).</li>
+        <li>It runs <code>machin encode</code> over the framework and app files — this is where machin typechecks.</li>
+        <li><code>machin build --emit-c</code> emits C; <code>cc -shared -fPIC -std=c11</code> compiles it to <code>build/&lt;app&gt;.so.tmp</code>, then an atomic rename publishes it. Typically 0.5–1 s.</li>
+        <li>The host sees the new mtime, copies the file to a unique <code>/tmp/mdk-&lt;pid&gt;-&lt;n&gt;.so</code>, <code>dlopen</code>s it and switches its frame pointer to the new <code>mdk_frame</code>. <b>0.3 ms.</b></li>
+        <li>The next frame runs the new view against the same window, the same state store and last frame's layout.</li>
+      </ol>
+      <p>The old module is never <code>dlclose</code>d — machin's runtime may hold statics or threads — so each reload costs the size of the module (tens of KB) for the session. Release builds contain none of this.</p>
+
+      <h2>What survives a reload</h2>
+      <table>
+        <tr><th>survives</th><th>resets</th></tr>
+        <tr><td>the window, its size and position, the GL context, the glyph atlas and shaping cache</td><td>MFL globals (<code>var x = …</code>) — they belong to the module</td></tr>
+        <tr><td>everything in the state store: <code>state_int/set_int</code>, <code>state_f/set_f</code>, <code>state_str/set_str</code></td><td>anything a module allocated (it is still mapped, just unused)</td></tr>
+        <tr><td>last frame's laid-out rects — hover and press keep working across the swap</td><td></td></tr>
+      </table>
+
+      <h2 id="the-arena-rule">The arena rule</h2>
+      <p>The framework's exported entry point wraps your view in machin's <code>arena { }</code>:</p>
+      <pre><code>export func mdk_frame() {
+    arena {
+        ui_begin()
+        view()
+        ui_end()
+    }
+}</code></pre>
+      <p>Everything a frame allocates — strings from <code>str()</code>, concatenations, slices — is freed when the frame returns. Without it, a function called from a C loop keeps every allocation until the process exits: in testing, <b>1.6 GB after 200,000 frames</b>; with the arena, flat at 1.6 MB.</p>
+      <div class="callout warn"><b>Don't reassign MFL globals every frame</b>Inside an arena, assigning to a global <i>promotes</i> the value out of the arena so it outlives the frame. Do it every frame and that is a leak per frame. Keep per-frame data in locals, app state in the state store. Filling a global once (a cache built on the first frame) is fine.</div>
+      <p>This is also why the framework keeps its element tree in host-owned raw memory (<code>peek</code>/<code>poke</code>) rather than MFL slices: zero allocation per frame. See <a href="../internals/">internals</a>.</p>
+
+      <h2>The error overlay</h2>
+      <p>If <code>machin encode</code> or the C compiler rejects an edit, <code>mdk dev</code> writes the diagnostics to <code>build/&lt;app&gt;.so.err</code> and keeps the old module. The host draws that file over the last good frame — rounded red panel, first lines of the error. Fix the edit and the next successful build deletes the file; the overlay disappears with state intact.</p>
+      <div class="callout"><b>Reachability</b>machin typechecks what is reachable from the entry point. An error in a function <code>view()</code> never calls does not fail the build, so it shows no overlay — until you call it.</div>
+
+      <h2>Limits</h2>
+      <ul>
+        <li>Changing the <i>shape</i> of the state you store is up to you: the store is keyed by string, so renaming a key starts it from its default.</li>
+        <li>The host (<code>host/host.c</code>) is not reloaded; changing it needs a restart of <code>mdk dev</code> (it rebuilds itself automatically).</li>
+        <li>Linux today; the same mechanism maps to <code>dlopen</code> on macOS and <code>LoadLibrary</code> on Windows (milestone 4).</li>
+      </ul>
+      <p>Next: <a href="../benchmarks/">benchmarks →</a></p>
+    </div>

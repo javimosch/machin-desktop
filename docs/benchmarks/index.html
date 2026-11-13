@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Benchmarks: mdk vs MyGo · mdk</title>
+  <meta name="description" content="MyGo&#x27;s own scenes, same machine, both on the GPU — numbers, method, caveats, how to reproduce.">
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="stylesheet" href="../assets/site.css">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="llms.txt">
+  <meta property="og:title" content="Benchmarks: mdk vs MyGo">
+  <meta property="og:description" content="MyGo&#x27;s own scenes, same machine, both on the GPU — numbers, method, caveats, how to reproduce.">
+  <meta property="og:image" content="https://javimosch.github.io/machin-desktop/assets/scenes.png">
+</head>
+<body>
+  <nav class="nav">
+    <div class="in">
+      <a class="brand" href="../"><img src="../assets/logo.png" alt="">mdk</a>
+      <div class="links">
+        <a href="../guide/">Guide</a>
+        <a href="../layout/">Layout</a>
+        <a href="../hot-reload/">Hot reload</a>
+        <a href="../benchmarks/" class="on">Benchmarks</a>
+        <a href="../api/">API</a>
+        <a href="../internals/">Internals</a>
+        <a href="../agents/">Agents</a>
+      </div>
+      <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
+    </div>
+  </nav>
+  <main>
+    <div class="doc">
+      <div class="eyebrow">Benchmarks</div>
+      <h1>mdk vs MyGo, on MyGo's own scenes</h1>
+      <p class="lead">Same laptop, same scenes, same text from the same generators, both apps verified drawing on the GPU. mdk wins every measure — with caveats worth reading.</p>
+    </div>
+
+    <img src="../assets/bench.svg" alt="mdk vs MyGo bar chart: CPU per frame, frames per second, idle memory">
+
+    <div class="doc">
+      <h2>Results</h2>
+      <p class="muted">Intel i5-11320H (Xe graphics) · Ubuntu 22.04 · Mesa · X11 · 60 Hz · 3 rounds, medians · MyGo <code>d5c76cf</code> (0.9.0) · <a href="https://github.com/javimosch/machin-desktop/blob/master/bench/results-linux.json">raw JSON</a></p>
+      <table>
+        <tr><th>scene</th><th>measure</th><th>mdk</th><th>MyGo</th><th></th></tr>
+        <tr><td>—</td><td>release binary</td><td class="win">2.6 MB</td><td>10.1 MB</td><td>3.9× smaller</td></tr>
+        <tr><td><b>counter</b></td><td>startup to first frame</td><td class="win">283 ms</td><td>506 ms</td><td>5 runs; noisy (185–433 vs 266–1048)</td></tr>
+        <tr><td></td><td>memory at rest</td><td class="win">76.5 MB</td><td>116.1 MB</td><td></td></tr>
+        <tr><td></td><td>CPU at rest</td><td>0.00%</td><td>0.00%</td><td>tie</td></tr>
+        <tr><td><b>list</b><br><span class="muted">100k rows, scrolling 8 px/frame</span></td><td>CPU per frame</td><td class="win">0.48 ms</td><td>2.83 ms</td><td>5.9×</td></tr>
+        <tr><td></td><td>fps · p99 frame</td><td>60.0 · 20.7 ms</td><td>59.5 · 28.1 ms</td><td></td></tr>
+        <tr><td></td><td>peak memory</td><td class="win">77 MB</td><td>123 MB</td><td></td></tr>
+        <tr><td><b>grid</b><br><span class="muted">600 cells, every value changes every frame</span></td><td>CPU per frame</td><td class="win">3.9 ms</td><td>37.6 ms</td><td>9.6×</td></tr>
+        <tr><td></td><td>fps · p99 frame</td><td class="win">60.0 · 21.2 ms</td><td>18.8 · 91.5 ms</td><td>MyGo drops frames</td></tr>
+        <tr><td></td><td>peak memory</td><td class="win">78 MB</td><td>147 MB</td><td></td></tr>
+        <tr><td><b>document</b><br><span class="muted">40 paragraphs, ~20k chars, rewrapped every frame</span></td><td>CPU per frame</td><td class="win">0.52 ms</td><td>35.9 ms</td><td>69×</td></tr>
+        <tr><td></td><td>fps · p99 frame</td><td class="win">60.0 · 20.0 ms</td><td>21.0 · 89.7 ms</td><td>MyGo drops frames</td></tr>
+        <tr><td></td><td>peak memory</td><td class="win">83 MB</td><td>144 MB</td><td></td></tr>
+      </table>
+
+      <h2>Method</h2>
+      <p>The scenes are <a href="https://github.com/egoist/mygo/tree/main/benchmarks">MyGo's comparison apps</a> — the ones MyGo publishes against GPUI and egui. MyGo's app is its own <code>benchmarks/mygo</code>, built exactly as its docs build release apps. Ours is <a href="https://github.com/javimosch/machin-desktop/blob/master/examples/bench/app.src"><code>examples/bench</code></a>, a line-by-line transcription: the same word generator (MyGo's LCG, bit for bit), the same cell values and colors, the same sizes, gaps and font sizes, windows of 360×260 and 800×600.</p>
+      <p>MyGo's runner measures on macOS only (<code>proc_pid_rusage</code>), so <a href="https://github.com/javimosch/machin-desktop/blob/master/bench/run.py"><code>bench/run.py</code></a> applies its method on Linux:</p>
+      <ul>
+        <li><b>From outside the process</b> via <code>/proc</code>: CPU = user + system time of every thread (framework, GL driver, GTK for MyGo) between the app's <code>start</code> and <code>done</code>, divided by frames; memory = RSS at rest and the peak (<code>VmHWM</code>).</li>
+        <li><b>From the app</b>, the same stdout protocol for both: <code>ready</code> when the first frame is on screen (startup = process start → ready), <code>start</code> after 120 warmup frames, <code>done {frames, wallUs, p50Us, p99Us, maxUs}</code> after 600 measured frames, intervals timed at frame start.</li>
+        <li>Counter: 5 s after the first frame, RSS; then CPU over the next 5 s.</li>
+        <li>One unmeasured launch of each first; frameworks alternate order every round; medians.</li>
+      </ul>
+      <div class="callout good"><b>Both on the GPU</b>Verified, not assumed: <code>MYGO_FRAME_STATS=all</code> logs <code>drawn on the GPU: 4133 instances in 1 batches</code> for MyGo's grid. mdk draws its grid in one instanced call too.</div>
+
+      <h2>How to read it</h2>
+      <ul>
+        <li><b>One laptop.</b> On its own site (Apple M5, macOS) MyGo's grid is 5.7 ms/frame and its document 4.9 ms. Here its frame stats show where the time goes: <code>layout 34–42 ms</code>, 600 text layouts a frame in pure Go. mdk shapes text with HarfBuzz once and caches the run per (string, size, face); changed text is re-shaped, unchanged text is only re-broken into lines over cached advances. Expect the gap to shrink on faster CPUs — run it on yours.</li>
+        <li><b>Memory floor.</b> An empty SDL3 + OpenGL window on this Mesa stack is already 66 MB, so mdk's own share at rest is ~11 MB. MyGo on Linux also carries GTK.</li>
+        <li><b>p99 ≈ 20 ms</b> for both is this X11 compositor's jitter at 60 Hz.</li>
+        <li><b>Breadth is not measured.</b> MyGo ships ~80 widgets, accessibility, IME, right-to-left, menus/tray/dialogs, a webview mode, installers and auto-update. mdk has boxes, flexbox, text, wrapping, buttons and a virtual list. This compares engines.</li>
+      </ul>
+
+      <h2>Reproduce</h2>
+      <pre><code># MyGo's app, from a clone of github.com/egoist/mygo
+CGO_ENABLED=0 go build -trimpath -tags mygo_noinspector \
+  -ldflags "-s -w -X github.com/egoist/mygo.production=1" \
+  -o /tmp/bench-mygo ./benchmarks/mygo
+
+# mdk's, from this repo
+./mdk build examples/bench -o build/bench-release
+
+# about 10 minutes; windows open
+DISPLAY=:0 python3 bench/run.py --mygo /tmp/bench-mygo --mdk build/bench-release \
+  --runs 3 --out bench/results-linux.json</code></pre>
+      <p>Look at any scene: <code>MDK_SCENE=grid ./mdk shot examples/bench /tmp/g.ppm --size 800 600 --frames 30</code>.</p>
+    </div>
+
+    <div class="agentbox">For agents: <a href="llms.txt">this page as llms.txt</a><a href="../llms.txt">site index llms.txt</a><a href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md">SKILL.md</a></div>
+  </main>
+  <footer>
+    <div class="in">
+      <span>mdk · machin desktop kit · MIT</span>
+      <a href="https://github.com/javimosch/machin-desktop">source</a>
+      <a href="https://github.com/javimosch/machin">machin</a>
+      <a href="https://github.com/javimosch/machin-desktop/issues">issues</a>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,77 @@
+# mdk guide — getting started
+
+## Requirements
+
+- machin >= 0.142 on PATH (or $MACHIN)
+- C compiler
+- cmake (first run builds vendored SDL3 3.4.20)
+- FreeType + HarfBuzz dev packages (pkg-config freetype2 harfbuzz)
+- OpenGL 3.3
+- an X11/Wayland display (DISPLAY=:0)
+
+Ubuntu/Debian: `sudo apt install build-essential cmake pkg-config libfreetype-dev libharfbuzz-dev libgl-dev libx11-dev`
+
+## Steps
+
+```
+git clone https://github.com/javimosch/machin-desktop && cd machin-desktop
+./mdk new apps/hello     # writes apps/hello/app.src
+./mdk dev apps/hello     # window opens; edits redraw in place, state kept
+./mdk build apps/hello -o hello   # release binary
+```
+
+First run builds vendored SDL3 3.4.20 statically (~1 min).
+
+## The starter app
+
+```
+func view() {
+    n := state_int("count", 0)
+    col()
+    fill()
+    center()
+    gap(16.0)
+        text(str(n), 56.0)
+        bold()
+        row()
+        gap(10.0)
+            if button("Increment") { set_int("count", n + 1) }
+            if button_ghost("Reset") { set_int("count", 0) }
+        end()
+    end()
+}
+```
+
+## Three ideas
+
+1. `view()` rebuilds the whole tree every frame it runs (input, resize, reload, or `animate()`); idle apps run no frames.
+2. State lives in the host store (`state_int`/`set_int`, `state_f`/`set_f`, `state_str`/`set_str`) and survives reloads. MFL globals reset on reload and must not be reassigned every frame.
+3. Widgets return this frame's event: `if button("Save") { ... }`. Hit-testing uses last frame's layout.
+
+## App contract
+
+1. An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).
+2. Define exactly one `func view()`. It runs every frame that needs drawing (input, resize, reload, or animate()).
+3. Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame's temporaries are freed when it returns.
+4. Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).
+5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
+6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
+7. Widgets return their event for this frame: if button("Save") { ... }.
+
+## Commands
+
+- `./mdk new <appdir>` — scaffold an app directory with app.src (a counter)
+- `./mdk dev <appdir>` — build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame
+- `./mdk build <appdir> [-o out]` — one release binary with the app linked in (no reload, sleeps when idle)
+- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...` — render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view
+- `./mdk check <appdir>` — typecheck the app with the framework (machin encode), no window
+- `./mdk guide` — print this JSON
+
+## Verify without a human
+
+- `./mdk check <app>` — typecheck only
+- `./mdk shot <app> out.ppm --click X Y` — real SDL clicks, then screenshot; `convert out.ppm out.png`
+- during `mdk dev`: `kill -USR1 <mdk-host pid>` saves the frame to `$MDK_SHOT` (default /tmp/mdk-shot.ppm)
+
+---
+HTML: https://javimosch.github.io/machin-desktop/guide/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

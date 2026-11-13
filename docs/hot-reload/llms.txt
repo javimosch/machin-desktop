@@ -1,0 +1,35 @@
+# mdk hot reload
+
+`./mdk dev <appdir>`: save a file -> the running window redraws with the new code; window and state survive; a broken edit shows an overlay over the last good frame.
+
+## Pipeline on save
+
+1. mdk polls app + framework .src mtimes every 250 ms.
+2. `machin encode framework/*.src app/*.src` (typechecks).
+3. `machin build --emit-c` -> `cc -shared -fPIC -std=c11 -fno-strict-aliasing -fwrapv` -> build/<app>.so.tmp -> atomic rename. ~0.5-1 s.
+4. Host sees the mtime, copies to /tmp/mdk-<pid>-<n>.so, dlopen()s it, switches to the new `mfl_mdk_frame_0`. ~0.3 ms. Old module never dlclose()d.
+5. Next frame: new view, same window, same state store, same last-frame layout.
+
+## Survives vs resets
+
+- Survives: window/GL context/size, glyph atlas + shaping cache, the state store (state_int/set_int, state_f/set_f, state_str/set_str), last frame's rects (hover/press continue).
+- Resets: MFL globals (`var x = ...`), module allocations.
+
+## The arena rule (important)
+
+The framework's export wraps every frame in `arena { }`, so per-frame temporaries are freed. Without it a C-driven frame loop leaks everything (1.6 GB / 200k frames measured; flat 1.6 MB with it).
+Inside an arena, assigning to a GLOBAL promotes the value out of the arena -> reassigning a global every frame leaks every frame. Use locals for per-frame data and the state store for app state. Filling a global once is fine.
+
+## Error overlay
+
+On a failed encode/compile, mdk writes diagnostics to build/<app>.so.err and keeps the old module; the host draws the file over the last good frame. The next good build deletes it.
+machin typechecks reachably: an error in a function view() never calls produces no overlay.
+
+## Limits
+
+- state keys are strings: renaming a key resets it to its default
+- host/host.c is not reloaded (mdk dev rebuilds it on restart)
+- Linux today; macOS/Windows in M4
+
+---
+HTML: https://javimosch.github.io/machin-desktop/hot-reload/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

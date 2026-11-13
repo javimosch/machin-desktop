@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.png" width="120" alt="mdk"></p>
+<p align="center"><img src="docs/assets/logo.png" width="120" alt="mdk"></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-M2%20%C2%B7%20experimental-orange" alt="Status">
@@ -16,7 +16,7 @@ GPUI-style UI drawn on the GPU in **one draw call per frame**, and **hot reload 
 keeps your state** — edit the view while the app runs; the window never closes, the
 count never resets.
 
-[Quick start](#quick-start) · [Benchmarks](#benchmarks-mdk-vs-mygo-same-machine) · [How it works](#how-it-works) · [API](#api) · [Roadmap](#roadmap) · [machin](https://github.com/javimosch/machin)
+[**Docs**](https://javimosch.github.io/machin-desktop/) · [Quick start](#quick-start) · [Benchmarks](#benchmarks-mdk-vs-mygo-same-machine) · [How it works](#how-it-works) · [API](https://javimosch.github.io/machin-desktop/api/) · [For agents](#for-agents) · [Roadmap](#roadmap) · [machin](https://github.com/javimosch/machin)
 
 > ### ⚡ Faster than MyGo on MyGo's own benchmarks
 > Same laptop, same scenes, both on the GPU: **6–69× less CPU per frame**, a steady
@@ -24,7 +24,7 @@ count never resets.
 > memory. [Numbers and method ↓](#benchmarks-mdk-vs-mygo-same-machine)
 
 <p align="center">
-  <img src="docs/scenes.png" alt="mdk rendering MyGo's four benchmark scenes: counter, 100k-row list, 600-cell live grid, wrapped document" width="860">
+  <img src="docs/assets/scenes.png" alt="mdk rendering MyGo's four benchmark scenes: counter, 100k-row list, 600-cell live grid, wrapped document" width="860">
 </p>
 
 ```go
@@ -55,7 +55,7 @@ FreeType + HarfBuzz dev packages, OpenGL 3.3.
 ## Hot reload that keeps state
 
 <p align="center">
-  <img src="docs/hot-reload.png" alt="Left: the running counter at 2. Middle: after editing size, color and text while running — still 2. Right: a type error is shown over the last good frame." width="860">
+  <img src="docs/assets/hot-reload.png" alt="Left: the running counter at 2. Middle: after editing size, color and text while running — still 2. Right: a type error is shown over the last good frame." width="860">
 </p>
 
 1. **Running** — clicked twice: count is 2.
@@ -68,7 +68,7 @@ FreeType + HarfBuzz dev packages, OpenGL 3.3.
 ## Benchmarks: mdk vs MyGo, same machine
 
 <p align="center">
-  <img src="docs/bench.svg" alt="mdk vs MyGo bar chart: CPU per frame, frames per second, idle memory" width="860">
+  <img src="docs/assets/bench.svg" alt="mdk vs MyGo bar chart: CPU per frame, frames per second, idle memory" width="860">
 </p>
 
 [MyGo's own comparison scenes](https://github.com/egoist/mygo/tree/main/benchmarks)
@@ -172,6 +172,24 @@ reload.
 
 Colors are `0xRRGGBBAA` ints; the theme lives in `C_BG`, `C_TEXT`, `C_MUTED`,
 `C_ACCENT`, … at the top of `framework/ui.src`.
+
+## For agents
+
+> Paste into Claude Code, Devin, Codex or any coding agent:
+> `Use mdk for this desktop app: read https://javimosch.github.io/machin-desktop/llms.txt and follow it.`
+
+- **[`llms.txt` on every docs page](https://javimosch.github.io/machin-desktop/llms.txt)** — the site index links each page's own (`guide/llms.txt`, `layout/llms.txt`, `hot-reload/llms.txt`, `api/llms.txt`, …), so an agent fetches only what the task needs.
+- **[`SKILL.md`](SKILL.md)** — when to use mdk, the app contract, the build → screenshot → look loop, the gotchas.
+- **`./mdk guide`** — the API, commands, contract and gotchas as JSON (`mdk.guide/v1`); the same data renders the [API page](https://javimosch.github.io/machin-desktop/api/).
+- **`./mdk new` / `check` / `shot --click`** — scaffold, typecheck, and verify interactions with real SDL events, no human needed.
+
+## Docs site
+
+[javimosch.github.io/machin-desktop](https://javimosch.github.io/machin-desktop/) — plain
+HTML from [`docs/`](docs/): each page is `docs/<page>/index.html` with its
+`docs/<page>/llms.txt` beside it, built from `docs/_src/` by `python3 docs/build.py`
+(which also checks every relative link). The API page is generated from
+[`framework/guide.json`](framework/guide.json).
 
 ## Verify
 

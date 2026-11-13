@@ -1,0 +1,66 @@
+# Building mdk apps as an agent
+
+Prompt a user can paste: "Use mdk for this desktop app: read https://javimosch.github.io/machin-desktop/llms.txt and follow it."
+
+## Entry points
+
+- Site index: https://javimosch.github.io/machin-desktop/llms.txt (links every page's llms.txt)
+- Skill: https://github.com/javimosch/machin-desktop/blob/master/SKILL.md
+- `./mdk guide` — API, commands, contract, gotchas as JSON (schema mdk.guide/v1)
+
+## Workflow
+
+```
+./mdk guide                                   # learn the API
+./mdk new apps/thing                          # scaffold app.src
+# edit apps/thing/app.src — define func view()
+./mdk check apps/thing                        # typecheck, no window
+./mdk shot apps/thing /tmp/t.ppm --click 120 80
+convert /tmp/t.ppm /tmp/t.png                 # look at the PNG before claiming success
+./mdk build apps/thing -o thing               # release binary
+```
+
+`--click X Y` sends real SDL events (repeatable; one click per two frames), so a screenshot after clicks verifies interaction.
+
+## Contract
+
+1. An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).
+2. Define exactly one `func view()`. It runs every frame that needs drawing (input, resize, reload, or animate()).
+3. Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame's temporaries are freed when it returns.
+4. Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).
+5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
+6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
+7. Widgets return their event for this frame: if button("Save") { ... }.
+
+## Gotchas
+
+- machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).
+- MFL loops are `while cond { }`; there is no C-style for. Floats need a dot (16.0); int->float is float(i).
+- Struct types are `type T struct { ... }` with one field per line.
+- Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).
+- Modifiers apply to the last element: call them right after the element (or right after end() for a container).
+- Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.
+- To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it.
+
+## Starter
+
+```
+func view() {
+    n := state_int("count", 0)
+    col()
+    fill()
+    center()
+    gap(16.0)
+        text(str(n), 56.0)
+        bold()
+        row()
+        gap(10.0)
+            if button("Increment") { set_int("count", n + 1) }
+            if button_ghost("Reset") { set_int("count", 0) }
+        end()
+    end()
+}
+```
+
+---
+HTML: https://javimosch.github.io/machin-desktop/agents/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

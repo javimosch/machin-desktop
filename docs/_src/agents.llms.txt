@@ -1,0 +1,37 @@
+# Building mdk apps as an agent
+
+Prompt a user can paste: "Use mdk for this desktop app: read https://javimosch.github.io/machin-desktop/llms.txt and follow it."
+
+## Entry points
+
+- Site index: https://javimosch.github.io/machin-desktop/llms.txt (links every page's llms.txt)
+- Skill: https://github.com/javimosch/machin-desktop/blob/master/SKILL.md
+- `./mdk guide` — API, commands, contract, gotchas as JSON (schema mdk.guide/v1)
+
+## Workflow
+
+```
+./mdk guide                                   # learn the API
+./mdk new apps/thing                          # scaffold app.src
+# edit apps/thing/app.src — define func view()
+./mdk check apps/thing                        # typecheck, no window
+./mdk shot apps/thing /tmp/t.ppm --click 120 80
+convert /tmp/t.ppm /tmp/t.png                 # look at the PNG before claiming success
+./mdk build apps/thing -o thing               # release binary
+```
+
+`--click X Y` sends real SDL events (repeatable; one click per two frames), so a screenshot after clicks verifies interaction.
+
+## Contract
+
+{{contract_md}}
+
+## Gotchas
+
+{{gotchas_md}}
+
+## Starter
+
+```
+{{example}}
+```

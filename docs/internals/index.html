@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Internals · mdk</title>
+  <meta name="description" content="Host ABI, element records, the one-call renderer, text shaping cache, memory model.">
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="stylesheet" href="../assets/site.css">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="llms.txt">
+  <meta property="og:title" content="Internals">
+  <meta property="og:description" content="Host ABI, element records, the one-call renderer, text shaping cache, memory model.">
+  <meta property="og:image" content="https://javimosch.github.io/machin-desktop/assets/scenes.png">
+</head>
+<body>
+  <nav class="nav">
+    <div class="in">
+      <a class="brand" href="../"><img src="../assets/logo.png" alt="">mdk</a>
+      <div class="links">
+        <a href="../guide/">Guide</a>
+        <a href="../layout/">Layout</a>
+        <a href="../hot-reload/">Hot reload</a>
+        <a href="../benchmarks/">Benchmarks</a>
+        <a href="../api/">API</a>
+        <a href="../internals/" class="on">Internals</a>
+        <a href="../agents/">Agents</a>
+      </div>
+      <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
+    </div>
+  </nav>
+  <main>
+    <div class="doc">
+      <div class="eyebrow">Internals</div>
+      <h1>Internals</h1>
+      <p class="lead">Two halves joined by a plain C ABI: an MFL framework that builds and lays out the tree, and a C host that owns the window, the GPU, the text and everything that must outlive a reload.</p>
+
+      <pre><code> your app (.src, MFL)          framework/ui.src (MFL)              host/host.c (C)
+ ┌──────────────────┐   view   ┌───────────────────────┐  rects,  ┌──────────────────────┐
+ │ func view() {    │ ───────▶ │ element tree (raw mem)│  glyphs  │ SDL3 window · GL 3.3 │
+ │   col() text()   │          │ flexbox measure/place │ ───────▶ │ 1 instanced draw     │
+ │   button() ...   │ ◀─────── │ hit-test (last frame) │          │ SDF rects · shadows  │
+ └──────────────────┘ clicked  └───────────────────────┘          │ HarfBuzz + atlas     │
+        ▲                                                         │ state store · reload │
+        └──────────── dev: rebuilt .so, dlopen'd, state kept ─────┴──────────────────────┘</code></pre>
+
+      <h2>The frame</h2>
+      <ol>
+        <li>The host swaps its two element buffers (this frame's becomes last frame's), clears the instance buffer and the per-frame string pool, and calls <code>mfl_mdk_frame_0</code>.</li>
+        <li><code>mdk_frame</code> (MFL, inside <code>arena { }</code>) runs <code>ui_begin()</code> → your <code>view()</code> → <code>ui_end()</code>.</li>
+        <li><code>ui_end()</code>: <code>measure(0, window_w)</code> bottom-up with width constraints top-down, <code>place(0, 0, 0, w, h)</code> top-down, <code>paint()</code> in creation order calling <code>mdk_rect</code> / <code>mdk_shadow</code> / <code>mdk_text</code>, then <code>mdk_set_n</code>.</li>
+        <li>The host uploads the instances and issues <b>one</b> <code>glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n)</code>.</li>
+      </ol>
+      <p>Frames run only when something changes: an event, a reload, a pending build error change, or <code>animate()</code>. A release build waits in <code>SDL_WaitEvent</code> with no timeout — zero wake-ups at rest.</p>
+
+      <h2>Element records</h2>
+      <p>The tree is fixed-stride records in host-owned memory, read and written from MFL with <code>peek_*</code>/<code>poke_*</code>. No MFL allocation per element, no per-frame garbage, and the previous frame's buffer — which hover/press/click test against — survives a reload because the host owns it.</p>
+      <table>
+        <tr><th>offset</th><th>field</th><th>offset</th><th>field</th></tr>
+        <tr><td>0</td><td>kind (0 box, 1 text) · i32</td><td>72</td><td>gap · f32</td></tr>
+        <tr><td>4 / 8 / 12 / 16</td><td>parent / first / last child / next sibling · i32</td><td>76 / 88 / 92</td><td>bg / border / fg color · u32</td></tr>
+        <tr><td>20</td><td>dir (0 col, 1 row)</td><td>80 / 84</td><td>radius / border width · f32</td></tr>
+        <tr><td>24</td><td>flags (fillw, fillh, wrap)</td><td>96 / 108</td><td>font size · f32 / face · i32</td></tr>
+        <tr><td>28</td><td>text handle (host string pool)</td><td>100 / 104</td><td>shadow blur · f32 / color · u32</td></tr>
+        <tr><td>32–44</td><td>x, y, w, h (laid out) · f32</td><td>112</td><td>grow · f32</td></tr>
+        <tr><td>48 / 52</td><td>fixed w / h (−1 = none)</td><td>120 / 124</td><td>align / justify · i32</td></tr>
+        <tr><td>56–68</td><td>padding l, t, r, b</td><td>128 / 132</td><td>scroll offset / wrap width · f32</td></tr>
+      </table>
+      <p>Records are 160 bytes; the host gives 256-byte slots × 65,536 elements per buffer, calloc'd so untouched pages cost nothing.</p>
+
+      <h2>The renderer</h2>
+      <p>Every primitive is one 80-byte instance: rect (x, y, w, h), atlas uv, fill and border colors, radius, border width, kind, blur. One vertex shader expands each instance into a quad; one fragment shader branches on kind:</p>
+      <ul>
+        <li><b>rect</b> — a rounded-box signed distance gives antialiased corners at any scale; the border is a second distance band mixed in.</li>
+        <li><b>shadow</b> — the same distance field, smoothstepped over the blur radius.</li>
+        <li><b>glyph</b> — coverage sampled from an R8 atlas, tinted.</li>
+      </ul>
+      <p>Painting order is draw order, so parents land under children with no depth buffer. Blending is premultiplied-style <code>SRC_ALPHA, ONE_MINUS_SRC_ALPHA</code>.</p>
+
+      <h2>Text</h2>
+      <ul>
+        <li><b>Faces</b>: a regular and a bold face found from known system paths (then <code>fc-match</code>; override with <code>MDK_FONT</code> / <code>MDK_FONT_BOLD</code>).</li>
+        <li><b>Shaping cache</b>: each (string, pixel size, face) is shaped once with HarfBuzz into a run — glyph ids, advances, offsets, and break opportunities at spaces — kept in an 8,192-slot hash table (cleared wholesale when ¾ full).</li>
+        <li><b>Wrapping</b>: greedy over cached advances, so rewrapping the same text at a new width never re-shapes. Lines below the window are not emitted.</li>
+        <li><b>Atlas</b>: 1024² R8, glyphs rasterized by FreeType on first use, uploaded by dirty row range; when full it resets after the frame and refills on demand.</li>
+      </ul>
+
+      <h2>Host ABI</h2>
+      <p>The framework declares these in a headerless <code>extern "mdk" { … }</code> block; the dev host is linked <code>-rdynamic</code> so the app's <code>.so</code> resolves them against the executable at <code>dlopen</code>; the release links them directly.</p>
+      <table>
+        <tr><th>group</th><th>functions</th></tr>
+        <tr><td>text</td><td><code>mdk_str</code> · <code>mdk_text_w</code> · <code>mdk_line_h</code> · <code>mdk_text_wrap_h</code> · <code>mdk_last_wrap_w</code> · <code>mdk_text</code></td></tr>
+        <tr><td>paint</td><td><code>mdk_rect</code> · <code>mdk_shadow</code> · <code>mdk_clear</code></td></tr>
+        <tr><td>window / input</td><td><code>mdk_win_w/h</code> · <code>mdk_mouse_x/y</code> · <code>mdk_press_x/y</code> · <code>mdk_mouse_down</code> · <code>mdk_mouse_released</code> · <code>mdk_wheel</code> · <code>mdk_time</code> · <code>mdk_frame_no</code> · <code>mdk_animate</code></td></tr>
+        <tr><td>tree buffers</td><td><code>mdk_el_buf</code> · <code>mdk_prev_buf</code> · <code>mdk_prev_n</code> · <code>mdk_el_cap</code> · <code>mdk_set_n</code></td></tr>
+        <tr><td>state store</td><td><code>mdk_get_int/set_int</code> · <code>mdk_get_f/set_f</code> · <code>mdk_get_str/set_str</code></td></tr>
+      </table>
+      <p>Strings cross as <code>const char*</code>; the host copies what it keeps (<code>mdk_str</code> returns a handle into a per-frame pool), so no MFL string outlives its frame arena.</p>
+
+      <h2>How an MFL module becomes a <code>.so</code></h2>
+      <p>A machin program with no <code>main</code> and an <code>export func mdk_frame()</code> emits a non-static C symbol <code>mfl_mdk_frame_0</code> and no <code>int main</code>. <code>cc -shared -fPIC -std=c11 -fno-strict-aliasing -fwrapv</code> turns that into a loadable module whose runtime works without <code>main</code>. <code>-std=c11</code> matters: GNU mode predefines <code>unix</code>, which collides with a parameter name in machin's prelude.</p>
+
+      <h2>Test hooks</h2>
+      <ul>
+        <li><code>--shot out.ppm --frames N</code> — render N frames and write the framebuffer.</li>
+        <li><code>--click X Y</code> (repeatable) — queue real SDL motion/press/release events, one click per two frames.</li>
+        <li><code>SIGUSR1</code> — save the next frame to <code>$MDK_SHOT</code> without stopping.</li>
+        <li><code>MDK_BENCH=1</code> with <code>BENCH_WARMUP</code>/<code>BENCH_FRAMES</code> — MyGo's recorder protocol on stdout.</li>
+      </ul>
+    </div>
+
+    <div class="agentbox">For agents: <a href="llms.txt">this page as llms.txt</a><a href="../llms.txt">site index llms.txt</a><a href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md">SKILL.md</a></div>
+  </main>
+  <footer>
+    <div class="in">
+      <span>mdk · machin desktop kit · MIT</span>
+      <a href="https://github.com/javimosch/machin-desktop">source</a>
+      <a href="https://github.com/javimosch/machin">machin</a>
+      <a href="https://github.com/javimosch/machin-desktop/issues">issues</a>
+    </div>
+  </footer>
+</body>
+</html>

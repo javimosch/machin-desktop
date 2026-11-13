@@ -1,0 +1,25 @@
+## What mdk is
+
+mdk (machin desktop kit) builds native desktop apps in machin (MFL). The UI is a
+function of state run every frame (`func view()`), laid out by a small flexbox
+written in MFL, and drawn on the GPU in one instanced draw call per frame by a
+C host (SDL3 + OpenGL 3.3, HarfBuzz text). In development the app is a shared
+object the host reloads on every save: the window stays open and state kept in
+the host store (`state_int`/`set_int`, ...) survives.
+
+## Minimal app
+
+```
+{{example}}
+```
+
+## Commands
+
+{{commands_md}}
+
+## Headline numbers (MyGo's own benchmark scenes, same Linux laptop, both on GPU)
+
+- CPU per frame: list 0.48 vs 2.83 ms, grid 3.9 vs 37.6 ms, document 0.52 vs 35.9 ms
+- grid/document: mdk holds 60 fps, MyGo ~19-21 fps
+- release binary 2.6 MB vs 10.1 MB; memory at rest 76.5 vs 116 MB
+- one machine (i5-11320H, Mesa, X11); MyGo's own Apple M5 numbers are much faster than here

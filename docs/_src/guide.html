@@ -1,0 +1,60 @@
+    <div class="doc">
+      <div class="eyebrow">Guide</div>
+      <h1>Getting started</h1>
+      <p class="lead">From a clone to a window in four commands, then the three ideas you need: the view runs every frame, state lives in the host, widgets return their events.</p>
+
+      <h2>Install</h2>
+      <p>You need <a href="https://github.com/javimosch/machin">machin</a> ≥ 0.142 on your <code>PATH</code> (or in <code>$MACHIN</code>), a C compiler, cmake, the FreeType and HarfBuzz development packages, and OpenGL 3.3.</p>
+      <pre><code># Ubuntu / Debian
+sudo apt install build-essential cmake pkg-config libfreetype-dev libharfbuzz-dev libgl-dev libx11-dev
+
+git clone https://github.com/javimosch/machin-desktop
+cd machin-desktop
+./mdk dev examples/counter</code></pre>
+      <p>The first run downloads <b>SDL3 3.4.20</b> into <code>vendor/</code> and builds it statically, video subsystem only (about a minute). Every later build reuses it.</p>
+
+      <h2>Your first app</h2>
+      <pre><code>./mdk new apps/hello
+./mdk dev apps/hello</code></pre>
+      <p><code>mdk new</code> writes <code>apps/hello/app.src</code>:</p>
+      <pre><code>{{example_html}}</code></pre>
+      <p>Leave the window open, change <code>56.0</code> to <code>88.0</code> and save. The window redraws in place within a second; click a few times, change a color, save again — the count stays.</p>
+
+      <h2>Three ideas</h2>
+      <h3>1. The view runs every frame</h3>
+      <p><code>view()</code> rebuilds the whole element tree each frame it runs — after input, a resize, a reload, or when you call <code>animate()</code>. There is no retained widget object to update: draw what the state says. An idle app runs no frames at all.</p>
+      <h3>2. State lives in the host</h3>
+      <p>Read and write values with <code>state_int</code> / <code>set_int</code> (also <code>_f</code> for floats and <code>_str</code> for strings). The store belongs to the host process, which is why it survives hot reloads. MFL globals reset when the module reloads — and must not be reassigned every frame (see <a href="../hot-reload/#the-arena-rule">the arena rule</a>).</p>
+      <h3>3. Widgets return their events</h3>
+      <pre><code>if button("Save") { set_str("status", "saved") }</code></pre>
+      <p>A button is <code>true</code> on the frame the pointer is released over it after pressing on it. Hit-testing uses the previous frame's layout, so there's no callback registration and no event bus.</p>
+
+      <h2>The dev loop</h2>
+      <p><code>./mdk dev &lt;appdir&gt;</code> watches every <code>.src</code> in the app and the framework. On save it runs <code>machin encode</code> (which typechecks), emits C, compiles a shared object (~0.5–1 s) and swaps it into the running window (0.3 ms). If machin rejects the edit, the error is drawn over the last good frame. Close the window with Esc.</p>
+
+      <h2>Release builds</h2>
+      <pre><code>./mdk build apps/hello -o hello
+./hello</code></pre>
+      <p>The release links your app's C straight into the host: one binary (2.6 MB for the counter), no shared object, no reload checks, and it sleeps until an event — zero CPU at rest. It links FreeType, HarfBuzz and libGL from the system; SDL3 is static.</p>
+
+      <h2>Project layout</h2>
+      <table>
+        <tr><th>path</th><th>what</th></tr>
+        <tr><td><code>framework/ui.src</code></td><td>the UI core in MFL — prepended to every app</td></tr>
+        <tr><td><code>framework/guide.json</code></td><td>API + rules, printed by <code>mdk guide</code>; source of the <a href="../api/">API page</a></td></tr>
+        <tr><td><code>host/host.c</code></td><td>window, renderer, text, state store, reload</td></tr>
+        <tr><td><code>mdk</code></td><td>the CLI</td></tr>
+        <tr><td><code>examples/counter</code>, <code>examples/bench</code></td><td>hello world; MyGo's four benchmark scenes</td></tr>
+        <tr><td><code>bench/run.py</code></td><td>the side-by-side benchmark runner</td></tr>
+      </table>
+
+      <h2>Commands</h2>
+      {{commands_html}}
+
+      <h2>Checking your work without a human</h2>
+      <pre><code>./mdk check apps/hello                                   # typecheck only
+./mdk shot apps/hello /tmp/h.ppm --click 198 236           # real SDL click events, then a screenshot
+convert /tmp/h.ppm /tmp/h.png                              # look at it</code></pre>
+      <p>While <code>mdk dev</code> runs, <code>kill -USR1 &lt;mdk-host pid&gt;</code> saves the current frame to <code>$MDK_SHOT</code> (default <code>/tmp/mdk-shot.ppm</code>).</p>
+      <p>Next: <a href="../layout/">layout &amp; styling →</a></p>
+    </div>

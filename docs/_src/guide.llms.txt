@@ -1,0 +1,44 @@
+# mdk guide — getting started
+
+## Requirements
+
+{{requires_md}}
+
+Ubuntu/Debian: `sudo apt install build-essential cmake pkg-config libfreetype-dev libharfbuzz-dev libgl-dev libx11-dev`
+
+## Steps
+
+```
+git clone https://github.com/javimosch/machin-desktop && cd machin-desktop
+./mdk new apps/hello     # writes apps/hello/app.src
+./mdk dev apps/hello     # window opens; edits redraw in place, state kept
+./mdk build apps/hello -o hello   # release binary
+```
+
+First run builds vendored SDL3 3.4.20 statically (~1 min).
+
+## The starter app
+
+```
+{{example}}
+```
+
+## Three ideas
+
+1. `view()` rebuilds the whole tree every frame it runs (input, resize, reload, or `animate()`); idle apps run no frames.
+2. State lives in the host store (`state_int`/`set_int`, `state_f`/`set_f`, `state_str`/`set_str`) and survives reloads. MFL globals reset on reload and must not be reassigned every frame.
+3. Widgets return this frame's event: `if button("Save") { ... }`. Hit-testing uses last frame's layout.
+
+## App contract
+
+{{contract_md}}
+
+## Commands
+
+{{commands_md}}
+
+## Verify without a human
+
+- `./mdk check <app>` — typecheck only
+- `./mdk shot <app> out.ppm --click X Y` — real SDL clicks, then screenshot; `convert out.ppm out.png`
+- during `mdk dev`: `kill -USR1 <mdk-host pid>` saves the frame to `$MDK_SHOT` (default /tmp/mdk-shot.ppm)

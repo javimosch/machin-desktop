@@ -1,0 +1,82 @@
+    <div class="doc">
+      <div class="eyebrow">Layout</div>
+      <h1>Layout &amp; styling</h1>
+      <p class="lead">Open a container, add children, close it. Style the element you just made. Layout is a small flexbox: sizes flow up, width constraints flow down.</p>
+
+      <h2>Building a tree</h2>
+      <pre><code>col()                 // open a vertical container
+fill()                // ← modifiers style the LAST element: the col
+gap(12.0)
+    text("Title", 24.0)
+    bold()            // ← the text
+    row()
+    gap(8.0)
+        if button("OK") { set_int("ok", 1) }
+        spacer()      // pushes what follows to the right edge
+        if button_ghost("Cancel") { set_int("ok", 0) }
+    end()             // closes the row; modifiers now target it
+    padxy(0.0, 8.0)   // ← the row
+end()</code></pre>
+      <div class="callout"><b>The one rule</b>Modifiers apply to the last created element — or, right after <code>end()</code>, to the container it closed. Indentation is only for you.</div>
+
+      <h2>Containers</h2>
+      <table>
+        <tr><th></th><th>children flow</th><th>main axis</th><th>cross axis</th></tr>
+        <tr><td><code>col()</code></td><td>top → bottom</td><td>vertical</td><td>horizontal</td></tr>
+        <tr><td><code>row()</code></td><td>left → right</td><td>horizontal</td><td>vertical</td></tr>
+      </table>
+      <p>The root is a column the size of the window. Elements without a fixed size take the size of their content plus padding.</p>
+
+      <h2>Sizing</h2>
+      <ul>
+        <li><b>Content size</b> — the default: text measures its shaped width and line height; containers sum their children along the main axis (plus gaps) and take the widest on the cross axis, plus padding.</li>
+        <li><b>Fixed</b> — <code>width(px)</code>, <code>height(px)</code>, <code>size(w, h)</code>.</li>
+        <li><b>Fill</b> — <code>fillw()</code> / <code>fillh()</code> / <code>fill()</code>: along the parent's main axis it grows into free space; across it, it stretches.</li>
+        <li><b>Grow</b> — <code>grow(f)</code>: share of the free main-axis space, like CSS <code>flex-grow</code>.</li>
+      </ul>
+
+      <h2>Alignment</h2>
+      <p><code>align(A_START | A_CENTER | A_STRETCH | A_END)</code> places children on the cross axis. <code>justify(J_START | J_CENTER | J_END | J_BETWEEN)</code> distributes them on the main axis when nothing grows. <code>center()</code> sets both to center.</p>
+
+      <h2>Wrapping text</h2>
+      <pre><code>col()
+width(520.0)
+pad(12.0)
+gap(8.0)
+    para("A long paragraph that wraps at spaces to whatever width its container gives it…", 14.0)
+end()</code></pre>
+      <p><code>para()</code> wraps; <code>text()</code> never does. Because a paragraph's height depends on its width, measuring passes a width constraint down the tree (the container's fixed width or the window, minus padding). Wrapping is greedy at spaces, over glyph advances cached from HarfBuzz — re-wrapping unchanged text at a new width is cheap.</p>
+
+      <h2>Long lists</h2>
+      <pre><code>first, cnt := vlist(100000, 40.0, state_f("scroll", 0.0))
+k := 0
+while k &lt; cnt {
+    i := first + k
+    row()
+    height(40.0)
+    padxy(12.0, 0.0)
+    align(A_CENTER)
+    fillw()
+        text("Item " + str(i), 13.0)
+    end()
+    k = k + 1
+}
+end()</code></pre>
+      <p><code>vlist(n, row_h, scroll)</code> opens a list filling its parent and returns the first visible row and how many to build. Build exactly those rows, each <code>height(row_h)</code>. 100,000 rows cost what ~16 rows cost.</p>
+
+      <h2>Styling</h2>
+      <table>
+        <tr><th>modifier</th><th>effect</th></tr>
+        <tr><td><code>bg(0xRRGGBBAA)</code></td><td>background; alpha 00 draws nothing</td></tr>
+        <tr><td><code>radius(px)</code></td><td>rounded corners, computed by a signed-distance shader — crisp at any scale</td></tr>
+        <tr><td><code>border(px, rgba)</code></td><td>inside border</td></tr>
+        <tr><td><code>shadow(blur, rgba)</code></td><td>soft drop shadow</td></tr>
+        <tr><td><code>fg(rgba)</code> · <code>font(px)</code> · <code>bold()</code></td><td>text color, size, face — inherited by children</td></tr>
+      </table>
+      <p>The theme constants (<code>C_BG</code>, <code>C_SURFACE</code>, <code>C_TEXT</code>, <code>C_MUTED</code>, <code>C_ACCENT</code>, <code>C_BORDER</code>) are at the top of <code>framework/ui.src</code>.</p>
+
+      <h2>Painting order and culling</h2>
+      <p>Elements are created in pre-order, so painting walks them in creation order: parents under children, later siblings over earlier ones. Anything entirely outside the window is skipped; wrapped text also skips lines below the window.</p>
+      <div class="callout warn"><b>Not yet</b>No clipping inside a container, no wheel/drag scrolling, no text input — that is milestone 2.5.</div>
+      <p>Next: <a href="../hot-reload/">hot reload →</a> · all functions: <a href="../api/">API</a></p>
+    </div>

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Building mdk apps with an agent · mdk</title>
+  <meta name="description" content="llms.txt, SKILL.md and `mdk guide`: everything a coding agent needs to build an mdk app first try.">
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="stylesheet" href="../assets/site.css">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="llms.txt">
+  <meta property="og:title" content="Building mdk apps with an agent">
+  <meta property="og:description" content="llms.txt, SKILL.md and `mdk guide`: everything a coding agent needs to build an mdk app first try.">
+  <meta property="og:image" content="https://javimosch.github.io/machin-desktop/assets/scenes.png">
+</head>
+<body>
+  <nav class="nav">
+    <div class="in">
+      <a class="brand" href="../"><img src="../assets/logo.png" alt="">mdk</a>
+      <div class="links">
+        <a href="../guide/">Guide</a>
+        <a href="../layout/">Layout</a>
+        <a href="../hot-reload/">Hot reload</a>
+        <a href="../benchmarks/">Benchmarks</a>
+        <a href="../api/">API</a>
+        <a href="../internals/">Internals</a>
+        <a href="../agents/" class="on">Agents</a>
+      </div>
+      <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
+    </div>
+  </nav>
+  <main>
+    <div class="doc">
+      <div class="eyebrow">For agents</div>
+      <h1>Building mdk apps with an agent</h1>
+      <p class="lead">Every page of these docs has a plain-text twin, the repo ships a skill, and the CLI prints the whole API as JSON. An agent can build, run and visually verify an mdk app without a human in the loop.</p>
+
+      <h2>Hand it to your agent</h2>
+      <pre><code>Use mdk for this desktop app: read https://javimosch.github.io/machin-desktop/llms.txt and follow it.</code></pre>
+      <p>Paste that into Claude Code, Devin, Codex or any coding agent. The site index links each page's own <code>llms.txt</code>, so the agent fetches only what the task needs.</p>
+
+      <h2>Three entry points</h2>
+      <div class="cards">
+        <a class="card" href="../llms.txt"><h3>llms.txt — per page</h3><p>The site index, then one per page: <code>guide/llms.txt</code>, <code>layout/llms.txt</code>, <code>hot-reload/llms.txt</code>, <code>api/llms.txt</code>, …</p></a>
+        <a class="card" href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md"><h3>SKILL.md</h3><p>The repo's agent skill: when to use mdk, the contract, the workflow, the verification loop, the gotchas.</p></a>
+        <a class="card" href="../api/"><h3><code>./mdk guide</code></h3><p>The API, commands, contract and gotchas as JSON (<code>mdk.guide/v1</code>) — the same data that renders the API page.</p></a>
+      </div>
+
+      <h2>The loop an agent should run</h2>
+      <pre><code>./mdk guide                                   # learn the API (JSON)
+./mdk new apps/thing                          # scaffold
+# … edit apps/thing/app.src …
+./mdk check apps/thing                        # typecheck (fast, no window)
+./mdk shot apps/thing /tmp/t.ppm --click 120 80 --click 120 80
+convert /tmp/t.ppm /tmp/t.png                 # LOOK at the result
+./mdk build apps/thing -o thing               # ship</code></pre>
+      <p>The screenshot step is the one agents skip and shouldn't: <code>--click</code> sends real SDL events through the normal input path, so a screenshot after clicks proves the interaction, not just the first frame.</p>
+
+      <h2>Contract</h2>
+      <ol><li>An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).</li><li>Define exactly one <code>func view()</code>. It runs every frame that needs drawing (input, resize, reload, or animate()).</li><li>Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame&#x27;s temporaries are freed when it returns.</li><li>Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).</li><li>Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.</li><li>Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().</li><li>Widgets return their event for this frame: if button(&quot;Save&quot;) { ... }.</li></ol>
+
+      <h2>Gotchas</h2>
+      <ul><li>machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).</li><li>MFL loops are <code>while cond { }</code>; there is no C-style for. Floats need a dot (16.0); int-&gt;float is float(i).</li><li>Struct types are <code>type T struct { ... }</code> with one field per line.</li><li>Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).</li><li>Modifiers apply to the last element: call them right after the element (or right after end() for a container).</li><li>Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.</li><li>To verify without a human: ./mdk shot &lt;app&gt; out.ppm --click X Y, then convert out.ppm out.png and look at it.</li></ul>
+
+      <h2>Why this matters</h2>
+      <p>machin itself is designed for agents to write cheaply — zero type annotations, one declaration per line, a <code>machin guide</code> that documents the language as JSON. mdk keeps that promise for desktop UIs: one language for the whole app, a typechecker in front of every reload, an immediate-mode API with no callbacks or retained widget objects to keep in sync, and a verification loop that needs no human.</p>
+    </div>
+
+    <div class="agentbox">For agents: <a href="llms.txt">this page as llms.txt</a><a href="../llms.txt">site index llms.txt</a><a href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md">SKILL.md</a></div>
+  </main>
+  <footer>
+    <div class="in">
+      <span>mdk · machin desktop kit · MIT</span>
+      <a href="https://github.com/javimosch/machin-desktop">source</a>
+      <a href="https://github.com/javimosch/machin">machin</a>
+      <a href="https://github.com/javimosch/machin-desktop/issues">issues</a>
+    </div>
+  </footer>
+</body>
+</html>

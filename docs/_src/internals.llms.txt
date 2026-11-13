@@ -1,0 +1,41 @@
+# mdk internals
+
+## Frame
+
+1. Host swaps its two element buffers (current -> previous), clears instances and the per-frame string pool, calls `mfl_mdk_frame_0`.
+2. `mdk_frame` (MFL, inside `arena { }`): `ui_begin()` -> `view()` -> `ui_end()`.
+3. `ui_end()`: `measure(0, window_w)` (sizes up, width constraints down), `place()` top-down (flexbox), `paint()` in creation order -> `mdk_rect`/`mdk_shadow`/`mdk_text`, then `mdk_set_n`.
+4. Host: one `glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n)`.
+Frames run only on events, reloads, overlay changes or `animate()`. Release waits in SDL_WaitEvent with no timeout.
+
+## Element records (host-owned raw memory, peek/poke from MFL, 160 B used of 256 B slots, 65,536 per buffer)
+
+0 kind(i32: 0 box,1 text) · 4 parent · 8 first · 12 last · 16 next · 20 dir(0 col,1 row) · 24 flags(1 fillw,2 fillh,4 wrap) · 28 text handle · 32/36/40/44 x,y,w,h(f32) · 48/52 fixed w/h(-1 none) · 56-68 pad l,t,r,b · 72 gap · 76 bg(u32) · 80 radius · 84 border w · 88 border color · 92 fg · 96 font size · 100 shadow blur · 104 shadow color · 108 face(i32) · 112 grow · 120 align · 124 justify · 128 scroll · 132 wrap width
+
+## Renderer
+
+One 80-byte instance per primitive (rect, uv, fill color, border color, radius, border, kind, blur). Fragment shader: kind 0 rounded-box SDF + border band, kind 2 shadow (SDF smoothstep over blur), kind 1 glyph coverage from R8 atlas. Draw order = paint order, no depth buffer.
+
+## Text
+
+- regular + bold faces (known paths, then fc-match; MDK_FONT / MDK_FONT_BOLD)
+- shaping cache: (string, px, face) -> HarfBuzz run (gids, advances, offsets, break-after-space flags), 8192-slot hash, cleared when 3/4 full
+- greedy wrap over cached advances; lines below the window not emitted
+- atlas 1024^2 R8, FreeType on first use, dirty-row uploads, reset after a frame that overflowed it
+
+## Host ABI (headerless `extern "mdk"`; dev host linked -rdynamic)
+
+text: mdk_str, mdk_text_w, mdk_line_h, mdk_text_wrap_h, mdk_last_wrap_w, mdk_text
+paint: mdk_rect, mdk_shadow, mdk_clear
+window/input: mdk_win_w/h, mdk_mouse_x/y, mdk_press_x/y, mdk_mouse_down, mdk_mouse_released, mdk_wheel, mdk_time, mdk_frame_no, mdk_animate
+tree: mdk_el_buf, mdk_prev_buf, mdk_prev_n, mdk_el_cap, mdk_set_n
+state: mdk_get_int/set_int, mdk_get_f/set_f, mdk_get_str/set_str
+Strings cross as const char*; the host copies (mdk_str -> per-frame pool handle).
+
+## MFL module -> .so
+
+No `main` + `export func mdk_frame()` => non-static C symbol `mfl_mdk_frame_0`, no `int main`. Compile: `cc -shared -fPIC -std=c11 -fno-strict-aliasing -fwrapv`. -std=c11 is required (GNU mode predefines `unix`).
+
+## Test hooks
+
+`--shot out.ppm --frames N` · `--click X Y` (real SDL events) · SIGUSR1 -> $MDK_SHOT · MDK_BENCH=1 + BENCH_WARMUP/BENCH_FRAMES -> ready/start/done protocol

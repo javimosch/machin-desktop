@@ -1,0 +1,35 @@
+    <div class="doc">
+      <div class="eyebrow">For agents</div>
+      <h1>Building mdk apps with an agent</h1>
+      <p class="lead">Every page of these docs has a plain-text twin, the repo ships a skill, and the CLI prints the whole API as JSON. An agent can build, run and visually verify an mdk app without a human in the loop.</p>
+
+      <h2>Hand it to your agent</h2>
+      <pre><code>Use mdk for this desktop app: read https://javimosch.github.io/machin-desktop/llms.txt and follow it.</code></pre>
+      <p>Paste that into Claude Code, Devin, Codex or any coding agent. The site index links each page's own <code>llms.txt</code>, so the agent fetches only what the task needs.</p>
+
+      <h2>Three entry points</h2>
+      <div class="cards">
+        <a class="card" href="{{up}}llms.txt"><h3>llms.txt — per page</h3><p>The site index, then one per page: <code>guide/llms.txt</code>, <code>layout/llms.txt</code>, <code>hot-reload/llms.txt</code>, <code>api/llms.txt</code>, …</p></a>
+        <a class="card" href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md"><h3>SKILL.md</h3><p>The repo's agent skill: when to use mdk, the contract, the workflow, the verification loop, the gotchas.</p></a>
+        <a class="card" href="../api/"><h3><code>./mdk guide</code></h3><p>The API, commands, contract and gotchas as JSON (<code>mdk.guide/v1</code>) — the same data that renders the API page.</p></a>
+      </div>
+
+      <h2>The loop an agent should run</h2>
+      <pre><code>./mdk guide                                   # learn the API (JSON)
+./mdk new apps/thing                          # scaffold
+# … edit apps/thing/app.src …
+./mdk check apps/thing                        # typecheck (fast, no window)
+./mdk shot apps/thing /tmp/t.ppm --click 120 80 --click 120 80
+convert /tmp/t.ppm /tmp/t.png                 # LOOK at the result
+./mdk build apps/thing -o thing               # ship</code></pre>
+      <p>The screenshot step is the one agents skip and shouldn't: <code>--click</code> sends real SDL events through the normal input path, so a screenshot after clicks proves the interaction, not just the first frame.</p>
+
+      <h2>Contract</h2>
+      {{contract_html}}
+
+      <h2>Gotchas</h2>
+      {{gotchas_html}}
+
+      <h2>Why this matters</h2>
+      <p>machin itself is designed for agents to write cheaply — zero type annotations, one declaration per line, a <code>machin guide</code> that documents the language as JSON. mdk keeps that promise for desktop UIs: one language for the whole app, a typechecker in front of every reload, an immediate-mode API with no callbacks or retained widget objects to keep in sync, and a verification loop that needs no human.</p>
+    </div>

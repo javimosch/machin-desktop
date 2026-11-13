@@ -1,0 +1,69 @@
+# mdk layout & styling
+
+## Building a tree
+
+Open a container (`col()` vertical, `row()` horizontal), add children, close with `end()`.
+Modifiers apply to the LAST created element, or — right after `end()` — to the container it closed.
+
+```
+col()
+fill()
+gap(12.0)
+    text("Title", 24.0)
+    bold()
+    row()
+    gap(8.0)
+        if button("OK") { set_int("ok", 1) }
+        spacer()
+        if button_ghost("Cancel") { set_int("ok", 0) }
+    end()
+    padxy(0.0, 8.0)
+end()
+```
+
+## Sizing rules
+
+- Root = a column the size of the window.
+- Default size = content: text = shaped width x line height; containers = sum of children on the main axis + gaps, max on the cross axis, + padding.
+- Fixed: `width(px)`, `height(px)`, `size(w, h)`.
+- Fill: `fillw()`/`fillh()`/`fill()` — grow into free space along the parent's main axis, stretch across it.
+- `grow(f)` = share of free main-axis space (flex-grow).
+- `align(A_START|A_CENTER|A_STRETCH|A_END)` cross axis; `justify(J_START|J_CENTER|J_END|J_BETWEEN)` main axis when nothing grows; `center()` = both center.
+
+## Wrapping
+
+`para(s, size)` wraps greedily at spaces to the width its container gives it (measure passes width constraints down: fixed width or window, minus padding). `text()` never wraps.
+
+## Virtual list
+
+```
+first, cnt := vlist(100000, 40.0, state_f("scroll", 0.0))
+k := 0
+while k < cnt {
+    i := first + k
+    row()
+    height(40.0)
+    fillw()
+        text("Item " + str(i), 13.0)
+    end()
+    k = k + 1
+}
+end()
+```
+
+Build exactly `cnt` rows starting at `first`, each `height(row_h)`.
+
+## Style
+
+`bg(0xRRGGBBAA)` (alpha 00 = invisible), `radius(px)` (SDF, crisp), `border(px, rgba)`, `shadow(blur, rgba)`, inherited: `fg(rgba)`, `font(px)`, `bold()`. Theme: C_BG, C_SURFACE, C_TEXT, C_MUTED, C_ACCENT, C_BORDER.
+
+## Paint order
+
+Creation (pre-)order: parents under children. Off-window elements and wrapped lines below the window are culled.
+
+## Not yet (M2.5)
+
+No clipping inside containers, no wheel/drag scrolling, no text input.
+
+---
+HTML: https://javimosch.github.io/machin-desktop/layout/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

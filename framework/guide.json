@@ -1,0 +1,99 @@
+{
+  "name": "mdk",
+  "schema": "mdk.guide/v1",
+  "version": "0.2.0",
+  "tagline": "Native desktop apps in machin (MFL): GPUI-style GPU UI in one draw call per frame, hot reload that keeps state.",
+  "docs": "https://javimosch.github.io/machin-desktop/",
+  "llms": "https://javimosch.github.io/machin-desktop/llms.txt",
+  "requires": ["machin >= 0.142 on PATH (or $MACHIN)", "C compiler", "cmake (first run builds vendored SDL3 3.4.20)", "FreeType + HarfBuzz dev packages (pkg-config freetype2 harfbuzz)", "OpenGL 3.3", "an X11/Wayland display (DISPLAY=:0)"],
+  "commands": [
+    {"cmd": "./mdk new <appdir>", "does": "scaffold an app directory with app.src (a counter)"},
+    {"cmd": "./mdk dev <appdir>", "does": "build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame"},
+    {"cmd": "./mdk build <appdir> [-o out]", "does": "one release binary with the app linked in (no reload, sleeps when idle)"},
+    {"cmd": "./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...", "does": "render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view"},
+    {"cmd": "./mdk check <appdir>", "does": "typecheck the app with the framework (machin encode), no window"},
+    {"cmd": "./mdk guide", "does": "print this JSON"}
+  ],
+  "app_contract": [
+    "An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).",
+    "Define exactly one `func view()`. It runs every frame that needs drawing (input, resize, reload, or animate()).",
+    "Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame's temporaries are freed when it returns.",
+    "Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).",
+    "Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.",
+    "Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().",
+    "Widgets return their event for this frame: if button(\"Save\") { ... }."
+  ],
+  "api": [
+    {"category": "containers", "fns": [
+      {"name": "col", "sig": "col() -> int", "summary": "open a vertical container (children top to bottom); returns its element index"},
+      {"name": "row", "sig": "row() -> int", "summary": "open a horizontal container (children left to right)"},
+      {"name": "end", "sig": "end()", "summary": "close the innermost open container; following modifiers target it"},
+      {"name": "spacer", "sig": "spacer() -> int", "summary": "an empty element with grow 1: pushes siblings apart"},
+      {"name": "vlist", "sig": "vlist(n int, row_h float, scroll float) -> (first int, count int)", "summary": "open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()"}
+    ]},
+    {"category": "content", "fns": [
+      {"name": "text", "sig": "text(s string, size float) -> int", "summary": "one line of text at size px (shaped with HarfBuzz, cached)"},
+      {"name": "para", "sig": "para(s string, size float) -> int", "summary": "a paragraph: wraps at spaces to the width its container gives it"},
+      {"name": "label", "sig": "label(s string) -> int", "summary": "text at the current element's font size"}
+    ]},
+    {"category": "widgets", "fns": [
+      {"name": "button", "sig": "button(s string) -> bool", "summary": "accent button; true on the frame it is clicked (press and release inside)"},
+      {"name": "button_ghost", "sig": "button_ghost(s string) -> bool", "summary": "outlined surface button; same semantics"},
+      {"name": "button_styled", "sig": "button_styled(s string, base int, hover int, pressed int) -> bool", "summary": "button with your own three colors"}
+    ]},
+    {"category": "layout", "fns": [
+      {"name": "fill", "sig": "fill()", "summary": "take all space on both axes (grow on the main axis, stretch on the cross axis)"},
+      {"name": "fillw", "sig": "fillw()", "summary": "take all horizontal space"},
+      {"name": "fillh", "sig": "fillh()", "summary": "take all vertical space"},
+      {"name": "width", "sig": "width(px float)", "summary": "fixed width"},
+      {"name": "height", "sig": "height(px float)", "summary": "fixed height"},
+      {"name": "size", "sig": "size(w float, h float)", "summary": "fixed width and height"},
+      {"name": "pad", "sig": "pad(px float)", "summary": "padding on all sides"},
+      {"name": "padxy", "sig": "padxy(x float, y float)", "summary": "horizontal and vertical padding"},
+      {"name": "gap", "sig": "gap(px float)", "summary": "space between children"},
+      {"name": "grow", "sig": "grow(f float)", "summary": "share of the free main-axis space"},
+      {"name": "align", "sig": "align(A_START|A_CENTER|A_STRETCH|A_END)", "summary": "children's cross-axis alignment"},
+      {"name": "justify", "sig": "justify(J_START|J_CENTER|J_END|J_BETWEEN)", "summary": "children's main-axis distribution (when nothing grows)"},
+      {"name": "center", "sig": "center()", "summary": "align + justify center"},
+      {"name": "scroll_y", "sig": "scroll_y(px float)", "summary": "offset a vertical container's content by px"}
+    ]},
+    {"category": "style", "fns": [
+      {"name": "bg", "sig": "bg(rgba int)", "summary": "background color, 0xRRGGBBAA"},
+      {"name": "fg", "sig": "fg(rgba int)", "summary": "text color (inherited by children)"},
+      {"name": "font", "sig": "font(px float)", "summary": "font size (inherited)"},
+      {"name": "bold", "sig": "bold()", "summary": "bold face (inherited)"},
+      {"name": "radius", "sig": "radius(px float)", "summary": "corner radius (SDF, crisp at any scale)"},
+      {"name": "border", "sig": "border(px float, rgba int)", "summary": "inside border"},
+      {"name": "shadow", "sig": "shadow(blur float, rgba int)", "summary": "soft drop shadow"}
+    ]},
+    {"category": "state (survives hot reload)", "fns": [
+      {"name": "state_int", "sig": "state_int(key string, default int) -> int", "summary": "read a host-owned int (default on first read)"},
+      {"name": "set_int", "sig": "set_int(key string, v int)", "summary": "write it"},
+      {"name": "state_f", "sig": "state_f(key string, default float) -> float", "summary": "float variant"},
+      {"name": "set_f", "sig": "set_f(key string, v float)", "summary": "write it"},
+      {"name": "state_str", "sig": "state_str(key string, default string) -> string", "summary": "string variant"},
+      {"name": "set_str", "sig": "set_str(key string, v string)", "summary": "write it"}
+    ]},
+    {"category": "input & time", "fns": [
+      {"name": "hovered", "sig": "hovered(i int) -> bool", "summary": "pointer is over element i (last frame's layout)"},
+      {"name": "pressed", "sig": "pressed(i int) -> bool", "summary": "button held after a press that started on i"},
+      {"name": "clicked", "sig": "clicked(i int) -> bool", "summary": "released this frame on i after pressing on i"},
+      {"name": "frame_no", "sig": "frame_no() -> int", "summary": "frames drawn since start"},
+      {"name": "animate", "sig": "animate()", "summary": "ask for another frame right away (otherwise the app sleeps until input)"}
+    ]},
+    {"category": "format", "fns": [
+      {"name": "fmt2", "sig": "fmt2(v float) -> string", "summary": "two decimals, as Go's %.2f"}
+    ]}
+  ],
+  "theme": {"C_BG": "0x16161AFF", "C_SURFACE": "0x202027FF", "C_TEXT": "0xEDEDF2FF", "C_MUTED": "0x9A9AA8FF", "C_ACCENT": "0x6E56CFFF", "C_BORDER": "0x33333DFF"},
+  "gotchas": [
+    "machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).",
+    "MFL loops are `while cond { }`; there is no C-style for. Floats need a dot (16.0); int->float is float(i).",
+    "Struct types are `type T struct { ... }` with one field per line.",
+    "Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).",
+    "Modifiers apply to the last element: call them right after the element (or right after end() for a container).",
+    "Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.",
+    "To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it."
+  ],
+  "example": "func view() {\n    n := state_int(\"count\", 0)\n    col()\n    fill()\n    center()\n    gap(16.0)\n        text(str(n), 56.0)\n        bold()\n        row()\n        gap(10.0)\n            if button(\"Increment\") { set_int(\"count\", n + 1) }\n            if button_ghost(\"Reset\") { set_int(\"count\", 0) }\n        end()\n    end()\n}\n"
+}
