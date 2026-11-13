@@ -42,6 +42,7 @@ typedef struct {
 } Inst;
 
 static Inst* g_inst;
+static int g_wh_px_hint = 1 << 30;  // framebuffer height, for culling text lines
 static int g_ninst, g_capinst;
 
 static Inst* push_inst(void) {
@@ -60,45 +61,60 @@ static void set_rgba(uint8_t* d, int64_t c) {
 }
 
 // ------------------------------------------------------------------- text
-#define ATLAS 2048
-typedef struct { uint32_t gid; int px; int used; float u0, v0, u1, v1; int w, h, bl, bt; } Glyph;
+// Two faces (regular, bold). Glyphs are rasterized once per (face, gid, px)
+// into an R8 atlas. Shaping is cached per (string, px, face): a frame that
+// shows the same text as the last one — the common case, and all of a resized
+// document — only re-breaks lines over cached advances, never re-shapes.
+#define ATLAS 1024
+typedef struct { uint32_t gid; int px, face, used; float u0, v0, u1, v1; int w, h, bl, bt; } Glyph;
 #define GCAP 8192
 static Glyph g_glyphs[GCAP];
 static uint8_t* g_atlas_px;
-static int g_ax, g_ay, g_arow, g_atlas_dirty;
+static int g_atlas_full;
+static int g_ax, g_ay, g_arow, g_atlas_dirty, g_atlas_y0 = ATLAS, g_atlas_y1;
 static GLuint g_atlas_tex;
 static FT_Library g_ft;
-static FT_Face g_face;
-static hb_font_t* g_hb;
-static int g_cur_px = -1;
+static FT_Face g_faces[2];
+static hb_font_t* g_hbs[2];
+static int g_cur_px[2] = {-1, -1};
 static float g_dpr = 1.0f;
 static hb_buffer_t* g_hbbuf;
 
-static void font_px(int px) {
-    if (px == g_cur_px) return;
-    FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)px);
-    hb_ft_font_changed(g_hb);
-    g_cur_px = px;
+static void font_px(int face, int px) {
+    if (px == g_cur_px[face]) return;
+    FT_Set_Pixel_Sizes(g_faces[face], 0, (FT_UInt)px);
+    hb_ft_font_changed(g_hbs[face]);
+    g_cur_px[face] = px;
 }
 
-static Glyph* glyph(uint32_t gid, int px) {
-    uint32_t h = (gid * 2654435761u) ^ ((uint32_t)px * 40503u);
+static void atlas_reset(void) {
+    memset(g_glyphs, 0, sizeof g_glyphs);
+    memset(g_atlas_px, 0, (size_t)ATLAS * ATLAS);
+    g_ax = g_ay = g_arow = 0;
+    g_atlas_y0 = 0; g_atlas_y1 = ATLAS; g_atlas_dirty = 1;
+}
+
+static Glyph* glyph(int face, uint32_t gid, int px) {
+    uint32_t h = (gid * 2654435761u) ^ ((uint32_t)px * 40503u) ^ ((uint32_t)face * 97u);
     for (int n = 0; n < GCAP; n++) {
         Glyph* g = &g_glyphs[(h + (uint32_t)n) & (GCAP - 1)];
-        if (g->used && g->gid == gid && g->px == px) return g;
+        if (g->used && g->gid == gid && g->px == px && g->face == face) return g;
         if (g->used) continue;
-        font_px(px);
-        if (FT_Load_Glyph(g_face, gid, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT)) return NULL;
-        FT_Bitmap* bm = &g_face->glyph->bitmap;
+        FT_Face f = g_faces[face];
+        font_px(face, px);
+        if (FT_Load_Glyph(f, gid, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT)) return NULL;
+        FT_Bitmap* bm = &f->glyph->bitmap;
         int w = (int)bm->width, hh = (int)bm->rows;
         if (g_ax + w + 1 > ATLAS) { g_ax = 0; g_ay += g_arow + 1; g_arow = 0; }
-        if (g_ay + hh + 1 > ATLAS) return NULL;  // atlas full: drop glyph (M1)
+        if (g_ay + hh + 1 > ATLAS) { g_atlas_full = 1; return NULL; }  // dropped this frame; atlas resets after it
         for (int r = 0; r < hh; r++)
             memcpy(g_atlas_px + (size_t)(g_ay + r) * ATLAS + g_ax, bm->buffer + r * bm->pitch, (size_t)w);
-        g->used = 1; g->gid = gid; g->px = px; g->w = w; g->h = hh;
-        g->bl = g_face->glyph->bitmap_left; g->bt = g_face->glyph->bitmap_top;
+        g->used = 1; g->gid = gid; g->px = px; g->face = face; g->w = w; g->h = hh;
+        g->bl = f->glyph->bitmap_left; g->bt = f->glyph->bitmap_top;
         g->u0 = (float)g_ax / ATLAS; g->v0 = (float)g_ay / ATLAS;
         g->u1 = (float)(g_ax + w) / ATLAS; g->v1 = (float)(g_ay + hh) / ATLAS;
+        if (g_ay < g_atlas_y0) g_atlas_y0 = g_ay;
+        if (g_ay + hh > g_atlas_y1) g_atlas_y1 = g_ay + hh;
         g_ax += w + 1; if (hh > g_arow) g_arow = hh;
         g_atlas_dirty = 1;
         return g;
@@ -106,37 +122,119 @@ static Glyph* glyph(uint32_t gid, int px) {
     return NULL;
 }
 
-// Shape s at size (logical px). Returns advance width in logical px; when
-// paint is set, emits one glyph instance per shaped glyph at (x, y_top).
-static float shape(const char* s, float size, int paint, float x, float y, int64_t rgba) {
-    int px = (int)(size * g_dpr + 0.5f);
-    if (px < 1) px = 1;
-    font_px(px);
-    hb_buffer_clear_contents(g_hbbuf);
-    hb_buffer_add_utf8(g_hbbuf, s, -1, 0, -1);
-    hb_buffer_guess_segment_properties(g_hbbuf);
-    hb_shape(g_hb, g_hbbuf, NULL, 0);
-    unsigned n;
-    hb_glyph_info_t* info = hb_buffer_get_glyph_infos(g_hbbuf, &n);
-    hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(g_hbbuf, &n);
-    float pen = 0, asc = (float)g_face->size->metrics.ascender / 64.0f / g_dpr;
-    for (unsigned i = 0; i < n; i++) {
-        if (paint) {
-            Glyph* g = glyph(info[i].codepoint, px);
-            font_px(px);
+// A shaped run: per glyph its id, advance and offsets (device px), and
+// whether a line may break after it (it shapes a space).
+typedef struct { uint32_t gid; float adv, xo, yo; uint8_t brk; } SG;
+typedef struct { uint64_t key; int used, n, px, face; float width; SG* g; } Run;
+#define RCAP 8192
+static Run g_runs[RCAP];
+static int g_nruns;
+
+static uint64_t run_key(const char* s, int px, int face) {
+    uint64_t h = 1469598103934665603ull ^ (uint64_t)px * 1099511628211ull ^ (uint64_t)face;
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) h = (h ^ *p) * 1099511628211ull;
+    return h ? h : 1;
+}
+
+static Run* run_of(const char* s, int px, int face) {
+    uint64_t k = run_key(s, px, face);
+    if (g_nruns > RCAP * 3 / 4) {  // simple eviction: drop everything, re-shape on demand
+        for (int i = 0; i < RCAP; i++) if (g_runs[i].used) free(g_runs[i].g);
+        memset(g_runs, 0, sizeof g_runs);
+        g_nruns = 0;
+    }
+    for (int n = 0; n < RCAP; n++) {
+        Run* r = &g_runs[(k + (uint64_t)n) & (RCAP - 1)];
+        if (r->used && r->key == k) return r;
+        if (r->used) continue;
+        font_px(face, px);
+        hb_buffer_clear_contents(g_hbbuf);
+        hb_buffer_add_utf8(g_hbbuf, s, -1, 0, -1);
+        hb_buffer_guess_segment_properties(g_hbbuf);
+        hb_shape(g_hbs[face], g_hbbuf, NULL, 0);
+        unsigned cnt;
+        hb_glyph_info_t* info = hb_buffer_get_glyph_infos(g_hbbuf, &cnt);
+        hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(g_hbbuf, &cnt);
+        r->used = 1; r->key = k; r->px = px; r->face = face; r->n = (int)cnt;
+        r->g = malloc(sizeof(SG) * (cnt ? cnt : 1));
+        float w = 0;
+        for (unsigned i = 0; i < cnt; i++) {
+            SG* g = &r->g[i];
+            g->gid = info[i].codepoint;
+            g->adv = (float)pos[i].x_advance / 64.0f;
+            g->xo = (float)pos[i].x_offset / 64.0f;
+            g->yo = (float)pos[i].y_offset / 64.0f;
+            g->brk = s[info[i].cluster] == ' ';
+            w += g->adv;
+        }
+        r->width = w;
+        g_nruns++;
+        return r;
+    }
+    return NULL;
+}
+
+static int text_px(float size) { int px = (int)(size * g_dpr + 0.5f); return px < 1 ? 1 : px; }
+
+// Greedy line breaking at spaces. Fills starts[] with each line's first glyph
+// and returns the line count; *maxline gets the widest line (device px).
+#define MAXLINES 4096
+static int g_starts[MAXLINES + 1];
+static int wrap(Run* r, float maxw, float* maxline) {
+    int lines = 0, ls = 0, lastbrk = -1;
+    float lw = 0, wmax = 0, upto_brk = 0;
+    g_starts[lines++] = 0;
+    for (int i = 0; i < r->n; i++) {
+        lw += r->g[i].adv;
+        if (r->g[i].brk) { lastbrk = i; upto_brk = lw - r->g[i].adv; }
+        if (maxw > 0 && lw > maxw && lastbrk >= ls && lastbrk < i && lines < MAXLINES) {
+            if (upto_brk > wmax) wmax = upto_brk;
+            ls = lastbrk + 1;
+            g_starts[lines++] = ls;
+            lw = 0;
+            for (int j = ls; j <= i; j++) lw += r->g[j].adv;
+            lastbrk = -1;
+        }
+    }
+    if (lw > wmax) wmax = lw;
+    g_starts[lines] = r->n;
+    if (maxline) *maxline = wmax;
+    return lines;
+}
+
+static float line_h_px(int face, int px) {
+    font_px(face, px);
+    return (float)g_faces[face]->size->metrics.height / 64.0f;
+}
+
+static void paint_run(Run* r, float x, float y, float maxw, int64_t rgba) {
+    float maxline;
+    int lines = wrap(r, maxw * g_dpr, &maxline);
+    FT_Face f = g_faces[r->face];
+    font_px(r->face, r->px);
+    float asc = (float)f->size->metrics.ascender / 64.0f;
+    float lh = (float)f->size->metrics.height / 64.0f;
+    float clip_y1 = (float)g_wh_px_hint;
+    for (int l = 0; l < lines; l++) {
+        float ly = y * g_dpr + lh * (float)l;
+        if (ly > clip_y1) break;              // below the window: nothing more is visible
+        if (ly + lh < 0) continue;            // above it
+        float pen = 0;
+        for (int i = g_starts[l]; i < g_starts[l + 1]; i++) {
+            SG* sg = &r->g[i];
+            Glyph* g = glyph(r->face, sg->gid, r->px);
             if (g && g->w > 0) {
                 Inst* in = push_inst();
                 in->kind = 1;
-                in->x = x + pen + ((float)pos[i].x_offset / 64.0f + (float)g->bl) / g_dpr;
-                in->y = y + asc - ((float)pos[i].y_offset / 64.0f + (float)g->bt) / g_dpr;
+                in->x = x + (pen + sg->xo + (float)g->bl) / g_dpr;
+                in->y = (ly + asc - sg->yo - (float)g->bt) / g_dpr;
                 in->w = (float)g->w / g_dpr; in->h = (float)g->h / g_dpr;
                 in->u0 = g->u0; in->v0 = g->v0; in->u1 = g->u1; in->v1 = g->v1;
                 set_rgba(in->col, rgba);
             }
+            pen += sg->adv;
         }
-        pen += (float)pos[i].x_advance / 64.0f / g_dpr;
     }
-    return pen;
 }
 
 // ------------------------------------------------- per-frame string pool
@@ -157,12 +255,28 @@ static const char* str_at(int64_t h) { return (h >= 0 && h < g_nstr) ? g_strs[h]
 static void strs_reset(void) { for (int i = 0; i < g_nstr; i++) free(g_strs[i]); g_nstr = 0; }
 
 // ---------------------------------------------------------- app-facing API
-float mdk_text_w(int64_t h, float size) { return shape(str_at(h), size, 0, 0, 0, 0); }
-float mdk_line_h(float size) {
-    font_px((int)(size * g_dpr + 0.5f));
-    return (float)g_face->size->metrics.height / 64.0f / g_dpr;
+// face: 0 regular, 1 bold. maxw <= 0 means one line.
+float mdk_text_w(int64_t h, float size, int64_t face) {
+    Run* r = run_of(str_at(h), text_px(size), (int)face & 1);
+    return r ? r->width / g_dpr : 0;
 }
-void mdk_text(int64_t h, float x, float y, float size, int64_t rgba) { shape(str_at(h), size, 1, x, y, rgba); }
+float mdk_line_h(float size, int64_t face) { return line_h_px((int)face & 1, text_px(size)) / g_dpr; }
+// Wrapped size at maxw: returns the height; the widest line goes to g_last_wrap_w.
+static float g_last_wrap_w;
+float mdk_text_wrap_h(int64_t h, float size, int64_t face, float maxw) {
+    int px = text_px(size);
+    Run* r = run_of(str_at(h), px, (int)face & 1);
+    if (!r) return 0;
+    float ml;
+    int lines = wrap(r, maxw * g_dpr, &ml);
+    g_last_wrap_w = ml / g_dpr;
+    return (float)lines * line_h_px((int)face & 1, px) / g_dpr;
+}
+float mdk_last_wrap_w(void) { return g_last_wrap_w; }
+void mdk_text(int64_t h, float x, float y, float size, int64_t rgba, int64_t face, float maxw) {
+    Run* r = run_of(str_at(h), text_px(size), (int)face & 1);
+    if (r) paint_run(r, x, y, maxw, rgba);
+}
 
 void mdk_rect(float x, float y, float w, float h, int64_t rgba, float radius, float border, int64_t brgba) {
     Inst* in = push_inst();
@@ -197,14 +311,16 @@ int64_t mdk_mouse_released(void) { return g_mreleased; }
 int64_t mdk_key_pressed(int64_t sc) { return (sc >= 0 && sc < 512) ? g_keys[sc] : 0; }
 double mdk_time(void) { return (double)SDL_GetTicksNS() / 1e9 - g_t0; }
 void mdk_animate(void) { g_anim = 1; }
+static int64_t g_frame_no;
+int64_t mdk_frame_no(void) { return g_frame_no; }
 
 // ------------------------------------------------------- element buffers
 // The MFL layout engine keeps its element tree in host-owned raw memory
 // (fixed-stride records, peek/poke from MFL): no per-frame MFL allocation, and
 // last frame's laid-out rects — what hit-testing reads — survive reloads.
 // Two buffers swap every frame; calloc'd pages stay untouched until used.
-#define EL_STRIDE 128
-#define EL_CAP 131072
+#define EL_STRIDE 256
+#define EL_CAP 65536
 static uint8_t *g_el_cur, *g_el_prev;
 static int64_t g_el_n, g_el_prev_n;
 int64_t mdk_el_buf(void) { return (int64_t)(intptr_t)g_el_cur; }
@@ -322,8 +438,10 @@ static void gl_draw(int fbw, int fbh, uint32_t clear) {
     glClear(GL_COLOR_BUFFER_BIT);
     if (g_atlas_dirty) {
         glBindTexture(GL_TEXTURE_2D, g_atlas_tex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ATLAS, ATLAS, GL_RED, GL_UNSIGNED_BYTE, g_atlas_px);
-        g_atlas_dirty = 0;
+        if (g_atlas_y1 > g_atlas_y0)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, g_atlas_y0, ATLAS, g_atlas_y1 - g_atlas_y0, GL_RED, GL_UNSIGNED_BYTE,
+                            g_atlas_px + (size_t)g_atlas_y0 * ATLAS);
+        g_atlas_dirty = 0; g_atlas_y0 = ATLAS; g_atlas_y1 = 0;
     }
     glUseProgram(g_prog);
     glUniform2f(g_u_screen, (float)g_ww, (float)g_wh);
@@ -389,17 +507,17 @@ static void draw_err(void) {
     int lines = 1;
     for (char* p = g_err; *p; p++) if (*p == '\n' && p[1]) lines++;
     if (lines > 8) lines = 8;
-    float lh = mdk_line_h(14);
+    float lh = mdk_line_h(14, 0);
     float bh = lh * (float)lines + 2 * pad + 22;
     mdk_rect(8, y - bh, (float)g_ww - 16, bh, 0x2A1215F0, 8, 1, 0xE5484DFF);
     float ty = y - bh + pad;
-    mdk_text(mdk_str("build failed — showing last good frame"), 20, ty, 14, 0xFF8A8FFF);
+    mdk_text(mdk_str("build failed — showing last good frame"), 20, ty, 14, 0xFF8A8FFF, 1, 0);
     ty += 22;
     char* save = NULL;
     char tmp[4096]; strncpy(tmp, g_err, sizeof tmp - 1); tmp[sizeof tmp - 1] = 0;
     int k = 0;
     for (char* line = strtok_r(tmp, "\n", &save); line && k < lines; line = strtok_r(NULL, "\n", &save), k++) {
-        mdk_text(mdk_str(line), 20, ty, 14, 0xF2F2F5FF);
+        mdk_text(mdk_str(line), 20, ty, 14, 0xF2F2F5FF, 0, (float)g_ww - 40);
         ty += lh;
     }
 }
@@ -438,6 +556,55 @@ static void feed_clicks(void) {
     g_click_phase = !g_click_phase;
 }
 
+// The bold sibling of a regular face path (Ubuntu-R -> Ubuntu-B, X.ttf -> X-Bold.ttf).
+// Benchmark recorder, the protocol of MyGo's benchmarks/: with MDK_BENCH=1
+// the app animates every frame; after BENCH_WARMUP frames it says "start",
+// and after BENCH_FRAMES more "done {frames,wallUs,p50Us,p99Us,maxUs}",
+// timing the intervals between frame starts. Then it stops animating.
+static int rec_on, rec_warm = 120, rec_n = 600, rec_seen;
+static double rec_last, rec_t0, *rec_iv;
+static void rec_init(void) {
+    const char* b = getenv("MDK_BENCH");
+    if (!b || strcmp(b, "1")) return;
+    rec_on = 1;
+    if (getenv("BENCH_WARMUP")) rec_warm = atoi(getenv("BENCH_WARMUP"));
+    if (getenv("BENCH_FRAMES")) rec_n = atoi(getenv("BENCH_FRAMES"));
+    rec_iv = calloc((size_t)rec_n + 1, sizeof(double));
+}
+static int cmp_d(const void* a, const void* b) { double x = *(const double*)a, y = *(const double*)b; return (x > y) - (x < y); }
+static void rec_tick(void) {
+    double now = (double)SDL_GetTicksNS() / 1e3;  // us
+    rec_seen++;
+    if (rec_seen == rec_warm) { printf("start\n"); fflush(stdout); rec_t0 = now; }
+    else if (rec_seen > rec_warm && rec_seen <= rec_warm + rec_n) {
+        int k = rec_seen - rec_warm - 1;
+        rec_iv[k] = now - rec_last;
+        if (k == rec_n - 1) {
+            qsort(rec_iv, (size_t)rec_n, sizeof(double), cmp_d);
+            printf("done {\"frames\":%d,\"wallUs\":%.0f,\"p50Us\":%.0f,\"p99Us\":%.0f,\"maxUs\":%.0f}\n",
+                   rec_n, now - rec_t0, rec_iv[rec_n / 2], rec_iv[rec_n * 99 / 100], rec_iv[rec_n - 1]);
+            fflush(stdout);
+        }
+    }
+    rec_last = now;
+    if (rec_seen <= rec_warm + rec_n) g_anim = 1;
+}
+
+static const char* find_bold(const char* reg) {
+    const char* env = getenv("MDK_FONT_BOLD");
+    if (env && *env) return env;
+    static char b[1024];
+    const char* pats[][2] = {{"-R.ttf", "-B.ttf"}, {"-Regular.ttf", "-Bold.ttf"}, {".ttf", "-Bold.ttf"}};
+    for (int k = 0; k < 3; k++) {
+        size_t n = strlen(reg), m = strlen(pats[k][0]);
+        if (n > m && !strcmp(reg + n - m, pats[k][0]) && n - m + strlen(pats[k][1]) < sizeof b) {
+            memcpy(b, reg, n - m); strcpy(b + n - m, pats[k][1]);
+            if (access(b, R_OK) == 0) return b;
+        }
+    }
+    return reg;
+}
+
 static const char* find_font(void) {
     const char* env = getenv("MDK_FONT");
     if (env && *env) return env;
@@ -474,7 +641,9 @@ int main(int argc, char** argv) {
         }
         else app = argv[i];
     }
-#ifndef MDK_STATIC
+#ifdef MDK_STATIC
+    if (app) setenv("MDK_SCENE", app, 1);  // release: first positional arg selects a scene
+#else
     if (!app) { fprintf(stderr, "usage: mdk-host <app.so> [--title T] [--size W H] [--shot out.ppm --frames N] [--bench N] [--stats]\n"); return 2; }
 #endif
     double t_start = (double)SDL_GetTicksNS();
@@ -491,9 +660,10 @@ int main(int argc, char** argv) {
     g_dpr = SDL_GetWindowDisplayScale(win);
     if (g_dpr <= 0) g_dpr = 1;
 
-    if (FT_Init_FreeType(&g_ft) || FT_New_Face(g_ft, find_font(), 0, &g_face)) { fprintf(stderr, "mdk: font load failed\n"); return 1; }
-    FT_Set_Pixel_Sizes(g_face, 0, 16);
-    g_hb = hb_ft_font_create_referenced(g_face);
+    const char* fp = find_font();
+    if (FT_Init_FreeType(&g_ft) || FT_New_Face(g_ft, fp, 0, &g_faces[0])) { fprintf(stderr, "mdk: font load failed: %s\n", fp); return 1; }
+    if (FT_New_Face(g_ft, find_bold(fp), 0, &g_faces[1])) FT_New_Face(g_ft, fp, 0, &g_faces[1]);
+    for (int f = 0; f < 2; f++) { FT_Set_Pixel_Sizes(g_faces[f], 0, 16); g_hbs[f] = hb_ft_font_create_referenced(g_faces[f]); }
     g_hbbuf = hb_buffer_create();
     g_atlas_px = calloc(ATLAS, ATLAS);
     g_el_cur = calloc(EL_CAP, EL_STRIDE);
@@ -509,6 +679,7 @@ int main(int argc, char** argv) {
 #endif
 
     signal(SIGUSR1, on_usr1);
+    rec_init();
     if (shot_path && g_nclicks) shot_frames += 2 * g_nclicks + 2;
     int frames = 0, dirty = 1, running = 1;
     double reload_check = 0, cpu_acc = 0;
@@ -517,9 +688,17 @@ int main(int argc, char** argv) {
         SDL_Event e;
         if (frames >= 1) feed_clicks();
         if (g_want_shot) dirty = 1;
-        int timeout = (dirty || g_anim || shot_path || bench_frames || g_click_i < g_nclicks) ? 0 : 250;
+        // Idle: a release build sleeps until an event (no wake-ups at all);
+        // dev wakes 5x a second to look for a rebuilt module.
+#ifdef MDK_STATIC
+        int idle_ms = -1;
+#else
+        int idle_ms = 200;
+#endif
+        int timeout = (dirty || g_anim || shot_path || bench_frames || g_click_i < g_nclicks) ? 0 : idle_ms;
+        int anim = g_anim || shot_path != NULL;  /* a screenshot run renders every frame */
         g_anim = 0;
-        int got = timeout ? SDL_WaitEventTimeout(&e, timeout) : SDL_PollEvent(&e);
+        int got = timeout ? SDL_WaitEventTimeout(&e, timeout) : SDL_PollEvent(&e);  /* -1 = wait forever */
         while (got) {
             switch (e.type) {
             case SDL_EVENT_QUIT: running = 0; break;
@@ -548,14 +727,15 @@ int main(int argc, char** argv) {
             if (before != g_err[0]) dirty = 1;
         }
 #endif
-        if (!dirty && !g_anim) continue;
+        if (!dirty && !anim) continue;
         dirty = 0;
         int lw, lh, fbw, fbh;
         SDL_GetWindowSize(win, &lw, &lh);
         SDL_GetWindowSizeInPixels(win, &fbw, &fbh);
         g_ww = lw; g_wh = lh;
         float ndpr = (float)fbw / (float)(lw > 0 ? lw : 1);
-        if (ndpr != g_dpr && ndpr > 0) { g_dpr = ndpr; g_cur_px = -1; }
+        if (ndpr != g_dpr && ndpr > 0) { g_dpr = ndpr; g_cur_px[0] = g_cur_px[1] = -1; }
+        g_wh_px_hint = fbh;
 
         double c0 = (double)SDL_GetTicksNS();
         g_ninst = 0;
@@ -570,6 +750,8 @@ int main(int argc, char** argv) {
         g_mpressed = g_mreleased = 0; g_wheel = 0;
         memset(g_keys, 0, sizeof g_keys);
         frames++;
+        g_frame_no++;
+        if (g_atlas_full) { g_atlas_full = 0; atlas_reset(); dirty = 1; }
         if (shot_path && frames >= shot_frames) { glFinish(); shot(shot_path, fbw, fbh); break; }
         if (g_want_shot) {
             g_want_shot = 0; glFinish();
@@ -577,6 +759,8 @@ int main(int argc, char** argv) {
             shot(sp && *sp ? sp : "/tmp/mdk-shot.ppm", fbw, fbh);
         }
         SDL_GL_SwapWindow(win);
+        if (frames == 1) { printf("ready\n"); fflush(stdout); }
+        if (rec_on) rec_tick();
         if (bench_frames) { g_anim = 1; if (frames >= bench_frames) break; }
         if (stats && cpu_n == 120) { fprintf(stderr, "mdk: frame cpu %.2f ms avg, %d instances\n", cpu_acc / cpu_n, g_ninst); cpu_acc = 0; cpu_n = 0; }
     }

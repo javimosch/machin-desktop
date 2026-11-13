@@ -1,0 +1,131 @@
+// bench — MyGo's comparison scenes (github.com/egoist/mygo benchmarks/), the
+// same text from the same generators, in windows of the same size:
+//   counter   360x260  a number and three buttons, then idle
+//   list      800x600  100,000 virtualized rows of three texts, scrolling 8 px/frame
+//   grid      800x600  600 cells, each its own background and a number changing every frame
+//   document  800x600  40 paragraphs (~20,000 chars) wrapped to a width changing every frame
+// The scene is $MDK_SCENE (the release binary takes it as its first argument).
+
+var g_words = []string{
+    "window", "button", "layout", "render", "scroll", "update", "shadow", "cursor",
+    "memory", "thread", "signal", "bitmap", "stroke", "column", "editor", "kernel",
+    "packet", "vector", "syntax", "buffer", "format", "cipher", "socket", "module",
+    "branch", "commit", "server", "client", "screen", "pointer", "display", "palette"}
+
+// words is the text of a seed — MyGo's LCG, bit for bit (uint32 wraparound)
+func words(seed, n) {
+    x := seed
+    out := ""
+    i := 0
+    while i < n {
+        x = (x * 1103515245 + 12345) & 0xFFFFFFFF
+        if i > 0 { out = out + " " }
+        out = out + g_words[(x >> 16) % 32]
+        i = i + 1
+    }
+    return out
+}
+
+func cell_value(cell, frame) { return float((cell * 7919 + frame * 31) % 100000) / 100.0 }
+
+func cell_color(v) {
+    if v < 333.0 { return 0xF6C9C4FF }
+    if v < 666.0 { return 0xF4E8B8FF }
+    return 0xC6E9C8FF
+}
+
+func scene_counter() {
+    n := state_int("count", 0)
+    col()
+    fill()
+    center()
+    gap(16.0)
+        text(str(n), 56.0)
+        bold()
+        row()
+        gap(8.0)
+            if button_ghost("−") { set_int("count", n - 1) }
+            width(44.0)
+            if button_ghost("Reset") { set_int("count", 0) }
+            if button_ghost("+") { set_int("count", n + 1) }
+            width(44.0)
+        end()
+    end()
+}
+
+func scene_list() {
+    first, cnt := vlist(100000, 40.0, float(frame_no()) * 8.0)
+    k := 0
+    while k < cnt {
+        i := first + k
+        row()
+        height(40.0)
+        padxy(12.0, 0.0)
+        gap(12.0)
+        align(A_CENTER)
+        fillw()
+            col()
+            grow(1.0)
+                text("Item " + str(i), 13.0)
+                text(words(i + 1, 6), 11.0)
+                fg(C_MUTED)
+            end()
+            text(fmt2(cell_value(i, 0)), 13.0)
+        end()
+        k = k + 1
+    }
+    end()
+}
+
+func scene_grid() {
+    f := frame_no()
+    col()
+    fill()
+    r := 0
+    while r < 30 {
+        row()
+        c := 0
+        while c < 20 {
+            v := cell_value(r * 20 + c, f)
+            row()
+            size(40.0, 20.0)
+            center()
+            bg(cell_color(v))
+                text(fmt2(v), 11.0)
+                fg(0x101010FF)
+            end()
+            c = c + 1
+        }
+        end()
+        r = r + 1
+    }
+    end()
+}
+
+var g_paras = []string{}
+
+func scene_document() {
+    if len(g_paras) == 0 {
+        i := 0
+        while i < 40 { g_paras = append(g_paras, words(i + 1, 70))  i = i + 1 }
+    }
+    w := round(600.0 + 150.0 * sin(float(frame_no()) / 30.0))
+    col()
+    fill()
+        col()
+        width(w)
+        gap(8.0)
+        pad(12.0)
+        k := 0
+        while k < 40 {
+            para(g_paras[k], 13.0)
+            k = k + 1
+        }
+        end()
+    end()
+}
+
+func view() {
+    s := env("MDK_SCENE")
+    if s == "list" { scene_list() } else if s == "grid" { scene_grid() } else if s == "document" { scene_document() } else { scene_counter() }
+}
