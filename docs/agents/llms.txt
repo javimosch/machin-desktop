@@ -31,6 +31,7 @@ convert /tmp/t.ppm /tmp/t.png                 # look at the PNG before claiming 
 5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
 6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
 7. Widgets return their event for this frame: if button("Save") { ... }.
+8. Window title and default size: an optional app.conf in the app dir (title=Notes, size=1180x760); window_title(s) changes the title at run time.
 
 ## Gotchas
 
@@ -39,8 +40,11 @@ convert /tmp/t.ppm /tmp/t.png                 # look at the PNG before claiming 
 - Struct types are `type T struct { ... }` with one field per line.
 - Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).
 - Modifiers apply to the last element: call them right after the element (or right after end() for a container).
-- Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.
 - To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it.
+- State strings are per-frame copies: v := state_str(k, "") then set_str(k, v) is safe; keep long-lived text in the store, not in MFL globals.
+- Text editing has no selection yet (ctrl+a moves the caret to the end; ctrl+Backspace deletes a word). text_area does not soft-wrap.
+- Coordinates for --click are window pixels at scale 1: if you read a downscaled screenshot, scale back up before clicking.
+- grow(f) children split the free space with a zero basis (CSS flex: 1); fixed siblings keep their size.
 
 ## Starter
 

@@ -13,6 +13,7 @@ Repository: https://github.com/javimosch/machin-desktop · agent skill: https://
 - [Benchmarks: mdk vs MyGo](https://javimosch.github.io/machin-desktop/benchmarks/llms.txt): MyGo's own scenes, same machine, both on the GPU — numbers, method, caveats, how to reproduce.
 - [API reference](https://javimosch.github.io/machin-desktop/api/llms.txt): Every framework function: containers, content, widgets, layout, style, state, input, format.
 - [Internals](https://javimosch.github.io/machin-desktop/internals/llms.txt): Host ABI, element records, the one-call renderer, text shaping cache, memory model.
+- [Notes — the dogfood app](https://javimosch.github.io/machin-desktop/notes/llms.txt): A micro-SaaS-style markdown notes dashboard built with mdk: nickname, stats, editor + live preview, autosave to .md files.
 - [Building mdk apps with an agent](https://javimosch.github.io/machin-desktop/agents/llms.txt): llms.txt, SKILL.md and `mdk guide`: everything a coding agent needs to build an mdk app first try.
 
 ## What mdk is
@@ -49,7 +50,7 @@ func view() {
 - `./mdk new <appdir>` — scaffold an app directory with app.src (a counter)
 - `./mdk dev <appdir>` — build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame
 - `./mdk build <appdir> [-o out]` — one release binary with the app linked in (no reload, sleeps when idle)
-- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...` — render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view
+- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y] [--type TEXT] [--key NAME] [--wheel DY]...` — render N frames after a script of real SDL input events (in order: clicks, text input, keys like Return / Backspace / ctrl+a / shift+Home, wheel), then save a screenshot; convert out.ppm out.png to view
 - `./mdk check <appdir>` — typecheck the app with the framework (machin encode), no window
 - `./mdk guide` — print this JSON
 

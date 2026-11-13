@@ -61,9 +61,15 @@ Build exactly `cnt` rows starting at `first`, each `height(row_h)`.
 
 Creation (pre-)order: parents under children. Off-window elements and wrapped lines below the window are culled.
 
-## Not yet (M2.5)
+## Clipping, scrolling, overlays
 
-No clipping inside containers, no wheel/drag scrolling, no text input.
+- `scroll_view(key)` — clipped column, wheel-scrolls while hovered, offset in the state store under key; close with end()
+- `clip()` — clip the last element's children to its rect (nests; per-instance in the shader, no extra draw calls)
+- `at(x, y)` — take the last element out of the flow, pinned inside its parent's content box (carets, badges, overlays)
+
+## Not yet
+
+Drag-to-scroll and scrollbars, horizontal scrolling, text selection.
 
 ---
 HTML: https://javimosch.github.io/machin-desktop/layout/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

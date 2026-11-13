@@ -19,6 +19,15 @@ extern "mdk" {
     fn mdk_last_wrap_w() f32
     fn mdk_text(int, f32, f32, f32, int, int, f32)
     fn mdk_frame_no() int
+    fn mdk_clip_push(f32, f32, f32, f32)
+    fn mdk_clip_pop()
+    fn mdk_typed() string
+    fn mdk_mods() int
+    fn mdk_key_pressed(int) int
+    fn mdk_clipboard() string
+    fn mdk_set_clipboard(string)
+    fn mdk_cursor(int)
+    fn mdk_set_title(string)
     fn mdk_rect(f32, f32, f32, f32, int, f32, f32, int)
     fn mdk_shadow(f32, f32, f32, f32, int, f32, f32)
     fn mdk_clear(int)
@@ -80,12 +89,18 @@ var E_ALIGN = 120
 var E_JUST = 124
 var E_SCROLL = 128
 var E_MAXW = 132
+var E_SUBEND = 136
+var E_AX = 140
+var E_AY = 144
+var E_CONTENT = 148
 var E_STRIDE = 160
 
 // flags
 var F_FILLW = 1
 var F_FILLH = 2
 var F_WRAP = 4
+var F_CLIP = 8
+var F_ABS = 16
 
 // align (cross axis) / justify (main axis)
 var A_START = 0
@@ -106,6 +121,30 @@ var C_ACCENT = 0x6E56CFFF
 var C_ACCENT_HI = 0x7C66DCFF
 var C_ACCENT_LO = 0x5B45B8FF
 var C_BORDER = 0x33333DFF
+var C_SURFACE2 = 0x2A2A33FF
+var C_INPUT = 0x111115FF
+var C_CODE = 0x0E0E12FF
+var C_DANGER = 0xE5484DFF
+
+// SDL scancodes
+var K_A = 4
+var K_C = 6
+var K_N = 17
+var K_S = 22
+var K_V = 25
+var K_RETURN = 40
+var K_ESCAPE = 41
+var K_BACKSPACE = 42
+var K_TAB = 43
+var K_HOME = 74
+var K_PAGEUP = 75
+var K_DELETE = 76
+var K_END = 77
+var K_PAGEDOWN = 78
+var K_RIGHT = 79
+var K_LEFT = 80
+var K_DOWN = 81
+var K_UP = 82
 
 // ---- frame state (ints only: no per-frame allocation) ----
 var g_buf = 0
@@ -115,6 +154,8 @@ var g_n = 0
 var g_last = -1
 var g_stack = 0
 var g_sp = 0
+var g_claimed = 0
+var g_cstack = 0
 
 func el(i) { return g_buf + i * E_STRIDE }
 func gi(i, off) { return peek_i32(g_buf + i * E_STRIDE, off) }
@@ -136,6 +177,7 @@ func new_el(kind) {
     si(i, E_FIRST, -1)
     si(i, E_LAST, -1)
     si(i, E_NEXT, -1)
+    si(i, E_SUBEND, i)
     sf(i, E_FW, -1.0)
     sf(i, E_FH, -1.0)
     si(i, E_ALIGN, A_START)
@@ -165,6 +207,8 @@ func push(i) {
 // ---- building ----
 func ui_begin() {
     if g_stack == 0 { g_stack = alloc(4096) }
+    if g_cstack == 0 { g_cstack = alloc(4096) }
+    g_claimed = 0
     g_buf = mdk_el_buf()
     g_prev = mdk_prev_buf()
     g_prevn = mdk_prev_n()
@@ -197,6 +241,7 @@ func end() {
     if g_sp > 1 {
         g_sp = g_sp - 1
         g_last = peek_i32(g_stack, g_sp * 4)
+        si(g_last, E_SUBEND, g_n - 1)
     }
 }
 
@@ -272,6 +317,13 @@ func shadow(blur, c) { sf(g_last, E_SHB, blur)  su(g_last, E_SHC, c) }
 func align(a) { si(g_last, E_ALIGN, a) }
 func justify(j) { si(g_last, E_JUST, j) }
 func center() { si(g_last, E_ALIGN, A_CENTER)  si(g_last, E_JUST, J_CENTER) }
+func clip() { si(g_last, E_FLAGS, gi(g_last, E_FLAGS) | F_CLIP) }
+// take the last element out of the flow and pin it at (x, y) inside its parent
+func at(x, y) {
+    si(g_last, E_FLAGS, gi(g_last, E_FLAGS) | F_ABS)
+    sf(g_last, E_AX, x)
+    sf(g_last, E_AY, y)
+}
 
 // ---- input against last frame's layout ----
 func prev_rect_has(i, x, y) {
@@ -297,7 +349,7 @@ func button_styled(s, base, hi, lo) {
     radius(8.0)
     center()
     c := base
-    if hovered(i) { c = hi }
+    if hovered(i) { c = hi  mdk_cursor(2) }
     if pressed(i) { c = lo }
     bg(c)
     shadow(6.0, 0x00000040)
@@ -316,7 +368,7 @@ func button_ghost(s) {
     center()
     border(1.0, C_BORDER)
     c := C_SURFACE
-    if hovered(i) { c = 0x2A2A33FF }
+    if hovered(i) { c = C_SURFACE2  mdk_cursor(2) }
     if pressed(i) { c = 0x1C1C22FF }
     bg(c)
     text(s, 15.0)
@@ -329,6 +381,9 @@ func is_row(i) { return gi(i, E_DIR) == 1 }
 
 // Sizes flow up, width constraints flow down (maxw): a wrapped paragraph
 // needs to know how wide it may be before it knows how tall it is.
+// Sizes flow up, width constraints flow down (maxw): a wrapped paragraph
+// needs to know how wide it may be before it knows how tall it is. In a row,
+// children that grow are measured last, against the width the fixed ones leave.
 func measure(i, maxw) {
     w := 0.0
     h := 0.0
@@ -350,22 +405,52 @@ func measure(i, maxw) {
         main := 0.0
         cross := 0.0
         n := 0
-        c := gi(i, E_FIRST)
         r := is_row(i)
         inner := maxw - gf(i, E_PL) - gf(i, E_PR)
-        while c >= 0 {
-            measure(c, inner)
-            cw := gf(c, E_W)
-            ch := gf(c, E_H)
-            if r {
-                main = main + cw
-                if ch > cross { cross = ch }
-            } else {
-                main = main + ch
-                if cw > cross { cross = cw }
+        left := inner
+        left_share := 0.0
+        late_grow := 0.0
+        pass := 0
+        while pass < 2 {
+            c := gi(i, E_FIRST)
+            while c >= 0 {
+                f := gi(c, E_FLAGS)
+                late := r && grow_of(c, r) > 0.0
+                if (f & F_ABS) != 0 {
+                    if pass == 0 { measure(c, inner) }
+                } else if (pass == 0 && !late) || (pass == 1 && late) {
+                    if pass == 0 { measure(c, inner) } else { measure(c, left_share * grow_of(c, r) / late_grow) }
+                    cw := gf(c, E_W)
+                    ch := gf(c, E_H)
+                    if r {
+                        main = main + cw
+                        left = left - cw
+                        if ch > cross { cross = ch }
+                    } else {
+                        main = main + ch
+                        if cw > cross { cross = cw }
+                    }
+                    n = n + 1
+                }
+                c = gi(c, E_NEXT)
             }
-            n = n + 1
-            c = gi(c, E_NEXT)
+            if pass == 0 && r {
+                // growing children share what the fixed ones and the gaps leave
+                nl := 0
+                c2 := gi(i, E_FIRST)
+                while c2 >= 0 {
+                    if (gi(c2, E_FLAGS) & F_ABS) == 0 && grow_of(c2, r) > 0.0 {
+                        late_grow = late_grow + grow_of(c2, r)
+                        nl = nl + 1
+                    }
+                    c2 = gi(c2, E_NEXT)
+                }
+                if n + nl > 1 { left = left - gf(i, E_GAP) * float(n + nl - 1) }
+                if left < 0.0 { left = 0.0 }
+                left_share = left
+                if late_grow == 0.0 { late_grow = 1.0 }
+            }
+            pass = pass + 1
         }
         if n > 1 { main = main + gf(i, E_GAP) * float(n - 1) }
         if r { w = main  h = cross } else { w = cross  h = main }
@@ -409,17 +494,27 @@ func place(i, x, y, w, h) {
     icross := iw
     if r { imain = iw  icross = ih }
     used := 0.0
+    content := 0.0
     tgrow := 0.0
     n := 0
     c := gi(i, E_FIRST)
     while c >= 0 {
-        if r { used = used + gf(c, E_W) } else { used = used + gf(c, E_H) }
-        tgrow = tgrow + grow_of(c, r)
-        n = n + 1
+        if (gi(c, E_FLAGS) & F_ABS) == 0 {
+            // growing children have a zero basis (CSS flex: 1): they split
+            // the free space evenly instead of keeping their content size
+            if r { content = content + gf(c, E_W) } else { content = content + gf(c, E_H) }
+            if grow_of(c, r) == 0.0 {
+                if r { used = used + gf(c, E_W) } else { used = used + gf(c, E_H) }
+            }
+            tgrow = tgrow + grow_of(c, r)
+            n = n + 1
+        }
         c = gi(c, E_NEXT)
     }
     g := gf(i, E_GAP)
     if n > 1 { used = used + g * float(n - 1) }
+    if n > 1 { content = content + g * float(n - 1) }
+    sf(i, E_CONTENT, content + gf(i, E_PT) + gf(i, E_PB))
     free := imain - used
     if free < 0.0 { free = 0.0 }
     pos := 0.0 - gf(i, E_SCROLL)
@@ -430,33 +525,45 @@ func place(i, x, y, w, h) {
         if j == J_BETWEEN && n > 1 { g = g + free / float(n - 1) }
     }
     a := gi(i, E_ALIGN)
+    sc := gf(i, E_SCROLL)
     c = gi(i, E_FIRST)
     while c >= 0 {
-        cm := gf(c, E_H)
-        cc := gf(c, E_W)
-        if r { cm = gf(c, E_W)  cc = gf(c, E_H) }
-        gr := grow_of(c, r)
-        if tgrow > 0.0 && gr > 0.0 { cm = cm + free * gr / tgrow }
-        if stretches(c, r, a) { cc = icross }
-        off := 0.0
-        if a == A_CENTER { off = (icross - cc) / 2.0 }
-        if a == A_END { off = icross - cc }
-        if r {
-            place(c, ix + pos, iy + off, cm, cc)
+        if (gi(c, E_FLAGS) & F_ABS) != 0 {
+            place(c, ix + gf(c, E_AX), iy + gf(c, E_AY) - sc, gf(c, E_W), gf(c, E_H))
         } else {
-            place(c, ix + off, iy + pos, cc, cm)
+            cm := gf(c, E_H)
+            cc := gf(c, E_W)
+            if r { cm = gf(c, E_W)  cc = gf(c, E_H) }
+            gr := grow_of(c, r)
+            if tgrow > 0.0 && gr > 0.0 { cm = free * gr / tgrow }
+            if stretches(c, r, a) { cc = icross }
+            off := 0.0
+            if a == A_CENTER { off = (icross - cc) / 2.0 }
+            if a == A_END { off = icross - cc }
+            if r {
+                place(c, ix + pos, iy + off, cm, cc)
+            } else {
+                place(c, ix + off, iy + pos, cc, cm)
+            }
+            pos = pos + cm + g
         }
-        pos = pos + cm + g
         c = gi(c, E_NEXT)
     }
 }
 
-// ---- paint: creation order is pre-order, so parents paint under children ----
+// ---- paint: creation order is pre-order, so parents paint under children.
+// A clipping element pushes its rect after painting itself; the clip pops
+// once painting passes the last element of its subtree.
 func paint() {
     ww := mdk_win_w()
     wh := mdk_win_h()
+    csp := 0
     i := 0
     while i < g_n {
+        while csp > 0 && peek_i32(g_cstack, (csp - 1) * 4) < i {
+            mdk_clip_pop()
+            csp = csp - 1
+        }
         x := gf(i, E_X)
         y := gf(i, E_Y)
         w := gf(i, E_W)
@@ -473,8 +580,17 @@ func paint() {
             if (bgc & 255) != 0 || bw > 0.0 {
                 mdk_rect(x, y, w, h, bgc, gf(i, E_RAD), bw, gu(i, E_BC))
             }
+            if (gi(i, E_FLAGS) & F_CLIP) != 0 && gi(i, E_SUBEND) > i && csp < 1000 {
+                mdk_clip_push(x, y, w, h)
+                poke_i32(g_cstack, csp * 4, gi(i, E_SUBEND))
+                csp = csp + 1
+            }
         }
         i = i + 1
+    }
+    while csp > 0 {
+        mdk_clip_pop()
+        csp = csp - 1
     }
 }
 
@@ -484,6 +600,7 @@ func ui_end() {
     place(0, 0.0, 0.0, mdk_win_w(), mdk_win_h())
     paint()
     mdk_set_n(g_n)
+    if (mdk_mouse_released() != 0 && g_claimed == 0) || key(K_ESCAPE) { mdk_set_str("_focus", "") }
 }
 
 // The host's entry point. Every frame runs inside an arena block, so the
@@ -522,3 +639,11 @@ func fmt2(v) {
 
 func frame_no() { return mdk_frame_no() }
 func animate() { mdk_animate() }
+
+// ---- window ----
+func window_title(s) { mdk_set_title(s) }
+// pointer shape for this frame: CURSOR_DEFAULT, CURSOR_TEXT, CURSOR_POINTER
+func cursor(kind) { mdk_cursor(kind) }
+var CURSOR_DEFAULT = 0
+var CURSOR_TEXT = 1
+var CURSOR_POINTER = 2

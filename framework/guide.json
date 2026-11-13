@@ -1,18 +1,43 @@
 {
   "name": "mdk",
   "schema": "mdk.guide/v1",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "tagline": "Native desktop apps in machin (MFL): GPUI-style GPU UI in one draw call per frame, hot reload that keeps state.",
   "docs": "https://javimosch.github.io/machin-desktop/",
   "llms": "https://javimosch.github.io/machin-desktop/llms.txt",
-  "requires": ["machin >= 0.142 on PATH (or $MACHIN)", "C compiler", "cmake (first run builds vendored SDL3 3.4.20)", "FreeType + HarfBuzz dev packages (pkg-config freetype2 harfbuzz)", "OpenGL 3.3", "an X11/Wayland display (DISPLAY=:0)"],
+  "requires": [
+    "machin >= 0.142 on PATH (or $MACHIN)",
+    "C compiler",
+    "cmake (first run builds vendored SDL3 3.4.20)",
+    "FreeType + HarfBuzz dev packages (pkg-config freetype2 harfbuzz)",
+    "OpenGL 3.3",
+    "an X11/Wayland display (DISPLAY=:0)"
+  ],
   "commands": [
-    {"cmd": "./mdk new <appdir>", "does": "scaffold an app directory with app.src (a counter)"},
-    {"cmd": "./mdk dev <appdir>", "does": "build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame"},
-    {"cmd": "./mdk build <appdir> [-o out]", "does": "one release binary with the app linked in (no reload, sleeps when idle)"},
-    {"cmd": "./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...", "does": "render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view"},
-    {"cmd": "./mdk check <appdir>", "does": "typecheck the app with the framework (machin encode), no window"},
-    {"cmd": "./mdk guide", "does": "print this JSON"}
+    {
+      "cmd": "./mdk new <appdir>",
+      "does": "scaffold an app directory with app.src (a counter)"
+    },
+    {
+      "cmd": "./mdk dev <appdir>",
+      "does": "build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame"
+    },
+    {
+      "cmd": "./mdk build <appdir> [-o out]",
+      "does": "one release binary with the app linked in (no reload, sleeps when idle)"
+    },
+    {
+      "cmd": "./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y] [--type TEXT] [--key NAME] [--wheel DY]...",
+      "does": "render N frames after a script of real SDL input events (in order: clicks, text input, keys like Return / Backspace / ctrl+a / shift+Home, wheel), then save a screenshot; convert out.ppm out.png to view"
+    },
+    {
+      "cmd": "./mdk check <appdir>",
+      "does": "typecheck the app with the framework (machin encode), no window"
+    },
+    {
+      "cmd": "./mdk guide",
+      "does": "print this JSON"
+    }
   ],
   "app_contract": [
     "An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).",
@@ -21,79 +46,404 @@
     "Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).",
     "Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.",
     "Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().",
-    "Widgets return their event for this frame: if button(\"Save\") { ... }."
+    "Widgets return their event for this frame: if button(\"Save\") { ... }.",
+    "Window title and default size: an optional app.conf in the app dir (title=Notes, size=1180x760); window_title(s) changes the title at run time."
   ],
   "api": [
-    {"category": "containers", "fns": [
-      {"name": "col", "sig": "col() -> int", "summary": "open a vertical container (children top to bottom); returns its element index"},
-      {"name": "row", "sig": "row() -> int", "summary": "open a horizontal container (children left to right)"},
-      {"name": "end", "sig": "end()", "summary": "close the innermost open container; following modifiers target it"},
-      {"name": "spacer", "sig": "spacer() -> int", "summary": "an empty element with grow 1: pushes siblings apart"},
-      {"name": "vlist", "sig": "vlist(n int, row_h float, scroll float) -> (first int, count int)", "summary": "open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()"}
-    ]},
-    {"category": "content", "fns": [
-      {"name": "text", "sig": "text(s string, size float) -> int", "summary": "one line of text at size px (shaped with HarfBuzz, cached)"},
-      {"name": "para", "sig": "para(s string, size float) -> int", "summary": "a paragraph: wraps at spaces to the width its container gives it"},
-      {"name": "label", "sig": "label(s string) -> int", "summary": "text at the current element's font size"}
-    ]},
-    {"category": "widgets", "fns": [
-      {"name": "button", "sig": "button(s string) -> bool", "summary": "accent button; true on the frame it is clicked (press and release inside)"},
-      {"name": "button_ghost", "sig": "button_ghost(s string) -> bool", "summary": "outlined surface button; same semantics"},
-      {"name": "button_styled", "sig": "button_styled(s string, base int, hover int, pressed int) -> bool", "summary": "button with your own three colors"}
-    ]},
-    {"category": "layout", "fns": [
-      {"name": "fill", "sig": "fill()", "summary": "take all space on both axes (grow on the main axis, stretch on the cross axis)"},
-      {"name": "fillw", "sig": "fillw()", "summary": "take all horizontal space"},
-      {"name": "fillh", "sig": "fillh()", "summary": "take all vertical space"},
-      {"name": "width", "sig": "width(px float)", "summary": "fixed width"},
-      {"name": "height", "sig": "height(px float)", "summary": "fixed height"},
-      {"name": "size", "sig": "size(w float, h float)", "summary": "fixed width and height"},
-      {"name": "pad", "sig": "pad(px float)", "summary": "padding on all sides"},
-      {"name": "padxy", "sig": "padxy(x float, y float)", "summary": "horizontal and vertical padding"},
-      {"name": "gap", "sig": "gap(px float)", "summary": "space between children"},
-      {"name": "grow", "sig": "grow(f float)", "summary": "share of the free main-axis space"},
-      {"name": "align", "sig": "align(A_START|A_CENTER|A_STRETCH|A_END)", "summary": "children's cross-axis alignment"},
-      {"name": "justify", "sig": "justify(J_START|J_CENTER|J_END|J_BETWEEN)", "summary": "children's main-axis distribution (when nothing grows)"},
-      {"name": "center", "sig": "center()", "summary": "align + justify center"},
-      {"name": "scroll_y", "sig": "scroll_y(px float)", "summary": "offset a vertical container's content by px"}
-    ]},
-    {"category": "style", "fns": [
-      {"name": "bg", "sig": "bg(rgba int)", "summary": "background color, 0xRRGGBBAA"},
-      {"name": "fg", "sig": "fg(rgba int)", "summary": "text color (inherited by children)"},
-      {"name": "font", "sig": "font(px float)", "summary": "font size (inherited)"},
-      {"name": "bold", "sig": "bold()", "summary": "bold face (inherited)"},
-      {"name": "radius", "sig": "radius(px float)", "summary": "corner radius (SDF, crisp at any scale)"},
-      {"name": "border", "sig": "border(px float, rgba int)", "summary": "inside border"},
-      {"name": "shadow", "sig": "shadow(blur float, rgba int)", "summary": "soft drop shadow"}
-    ]},
-    {"category": "state (survives hot reload)", "fns": [
-      {"name": "state_int", "sig": "state_int(key string, default int) -> int", "summary": "read a host-owned int (default on first read)"},
-      {"name": "set_int", "sig": "set_int(key string, v int)", "summary": "write it"},
-      {"name": "state_f", "sig": "state_f(key string, default float) -> float", "summary": "float variant"},
-      {"name": "set_f", "sig": "set_f(key string, v float)", "summary": "write it"},
-      {"name": "state_str", "sig": "state_str(key string, default string) -> string", "summary": "string variant"},
-      {"name": "set_str", "sig": "set_str(key string, v string)", "summary": "write it"}
-    ]},
-    {"category": "input & time", "fns": [
-      {"name": "hovered", "sig": "hovered(i int) -> bool", "summary": "pointer is over element i (last frame's layout)"},
-      {"name": "pressed", "sig": "pressed(i int) -> bool", "summary": "button held after a press that started on i"},
-      {"name": "clicked", "sig": "clicked(i int) -> bool", "summary": "released this frame on i after pressing on i"},
-      {"name": "frame_no", "sig": "frame_no() -> int", "summary": "frames drawn since start"},
-      {"name": "animate", "sig": "animate()", "summary": "ask for another frame right away (otherwise the app sleeps until input)"}
-    ]},
-    {"category": "format", "fns": [
-      {"name": "fmt2", "sig": "fmt2(v float) -> string", "summary": "two decimals, as Go's %.2f"}
-    ]}
+    {
+      "category": "containers",
+      "fns": [
+        {
+          "name": "col",
+          "sig": "col() -> int",
+          "summary": "open a vertical container (children top to bottom); returns its element index"
+        },
+        {
+          "name": "row",
+          "sig": "row() -> int",
+          "summary": "open a horizontal container (children left to right)"
+        },
+        {
+          "name": "end",
+          "sig": "end()",
+          "summary": "close the innermost open container; following modifiers target it"
+        },
+        {
+          "name": "spacer",
+          "sig": "spacer() -> int",
+          "summary": "an empty element with grow 1: pushes siblings apart"
+        },
+        {
+          "name": "vlist",
+          "sig": "vlist(n int, row_h float, scroll float) -> (first int, count int)",
+          "summary": "open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()"
+        },
+        {
+          "name": "scroll_view",
+          "sig": "scroll_view(key string) -> int",
+          "summary": "open a vertical container that clips its children and scrolls with the wheel while hovered; offset kept in the state store under key; close with end()"
+        },
+        {
+          "name": "card",
+          "sig": "card() -> int",
+          "summary": "open a surface card (bg, radius 12, border, padding 18, gap 8); close with end()"
+        }
+      ]
+    },
+    {
+      "category": "content",
+      "fns": [
+        {
+          "name": "text",
+          "sig": "text(s string, size float) -> int",
+          "summary": "one line of text at size px (shaped with HarfBuzz, cached)"
+        },
+        {
+          "name": "para",
+          "sig": "para(s string, size float) -> int",
+          "summary": "a paragraph: wraps at spaces to the width its container gives it"
+        },
+        {
+          "name": "label",
+          "sig": "label(s string) -> int",
+          "summary": "text at the current element's font size"
+        },
+        {
+          "name": "md_view",
+          "sig": "md_view(src string) -> int",
+          "summary": "render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs (inline marks shown as typed)"
+        }
+      ]
+    },
+    {
+      "category": "widgets",
+      "fns": [
+        {
+          "name": "button",
+          "sig": "button(s string) -> bool",
+          "summary": "accent button; true on the frame it is clicked (press and release inside)"
+        },
+        {
+          "name": "button_ghost",
+          "sig": "button_ghost(s string) -> bool",
+          "summary": "outlined surface button; same semantics"
+        },
+        {
+          "name": "button_styled",
+          "sig": "button_styled(s string, base int, hover int, pressed int) -> bool",
+          "summary": "button with your own three colors"
+        },
+        {
+          "name": "text_field",
+          "sig": "text_field(key string, placeholder string) -> string",
+          "summary": "single-line input; value and caret kept in the state store under key; click to focus, type (UTF-8/IME), Backspace/Delete/ctrl+Backspace, Left/Right/Home/End, ctrl+v paste"
+        },
+        {
+          "name": "text_area",
+          "sig": "text_area(key string, placeholder string) -> string",
+          "summary": "multi-line editor filling its container: Return/Tab/Up/Down too; scrolls with the wheel and follows the caret; long lines are clipped (no soft wrap yet)"
+        },
+        {
+          "name": "nav_item",
+          "sig": "nav_item(label string, active bool) -> bool",
+          "summary": "sidebar entry, highlighted when active; true when clicked"
+        },
+        {
+          "name": "list_item",
+          "sig": "list_item(title string, sub string, active bool) -> bool",
+          "summary": "two-line list entry; true when clicked"
+        },
+        {
+          "name": "avatar",
+          "sig": "avatar(name string, diameter float) -> int",
+          "summary": "round avatar with initials, colored from the name"
+        },
+        {
+          "name": "badge",
+          "sig": "badge(s string, rgba int) -> int",
+          "summary": "small pill label"
+        },
+        {
+          "name": "divider",
+          "sig": "divider() -> int",
+          "summary": "1 px horizontal rule"
+        }
+      ]
+    },
+    {
+      "category": "layout",
+      "fns": [
+        {
+          "name": "fill",
+          "sig": "fill()",
+          "summary": "take all space on both axes (grow on the main axis, stretch on the cross axis)"
+        },
+        {
+          "name": "fillw",
+          "sig": "fillw()",
+          "summary": "take all horizontal space"
+        },
+        {
+          "name": "fillh",
+          "sig": "fillh()",
+          "summary": "take all vertical space"
+        },
+        {
+          "name": "width",
+          "sig": "width(px float)",
+          "summary": "fixed width"
+        },
+        {
+          "name": "height",
+          "sig": "height(px float)",
+          "summary": "fixed height"
+        },
+        {
+          "name": "size",
+          "sig": "size(w float, h float)",
+          "summary": "fixed width and height"
+        },
+        {
+          "name": "pad",
+          "sig": "pad(px float)",
+          "summary": "padding on all sides"
+        },
+        {
+          "name": "padxy",
+          "sig": "padxy(x float, y float)",
+          "summary": "horizontal and vertical padding"
+        },
+        {
+          "name": "gap",
+          "sig": "gap(px float)",
+          "summary": "space between children"
+        },
+        {
+          "name": "grow",
+          "sig": "grow(f float)",
+          "summary": "share of the free main-axis space"
+        },
+        {
+          "name": "align",
+          "sig": "align(A_START|A_CENTER|A_STRETCH|A_END)",
+          "summary": "children's cross-axis alignment"
+        },
+        {
+          "name": "justify",
+          "sig": "justify(J_START|J_CENTER|J_END|J_BETWEEN)",
+          "summary": "children's main-axis distribution (when nothing grows)"
+        },
+        {
+          "name": "center",
+          "sig": "center()",
+          "summary": "align + justify center"
+        },
+        {
+          "name": "scroll_y",
+          "sig": "scroll_y(px float)",
+          "summary": "offset a vertical container's content by px"
+        },
+        {
+          "name": "clip",
+          "sig": "clip()",
+          "summary": "clip the last element's children to its rect"
+        },
+        {
+          "name": "at",
+          "sig": "at(x float, y float)",
+          "summary": "take the last element out of the flow and pin it at (x, y) inside its parent's content box (overlays, carets, badges)"
+        }
+      ]
+    },
+    {
+      "category": "style",
+      "fns": [
+        {
+          "name": "bg",
+          "sig": "bg(rgba int)",
+          "summary": "background color, 0xRRGGBBAA"
+        },
+        {
+          "name": "fg",
+          "sig": "fg(rgba int)",
+          "summary": "text color (inherited by children)"
+        },
+        {
+          "name": "font",
+          "sig": "font(px float)",
+          "summary": "font size (inherited)"
+        },
+        {
+          "name": "bold",
+          "sig": "bold()",
+          "summary": "bold face (inherited)"
+        },
+        {
+          "name": "radius",
+          "sig": "radius(px float)",
+          "summary": "corner radius (SDF, crisp at any scale)"
+        },
+        {
+          "name": "border",
+          "sig": "border(px float, rgba int)",
+          "summary": "inside border"
+        },
+        {
+          "name": "shadow",
+          "sig": "shadow(blur float, rgba int)",
+          "summary": "soft drop shadow"
+        }
+      ]
+    },
+    {
+      "category": "state (survives hot reload)",
+      "fns": [
+        {
+          "name": "state_int",
+          "sig": "state_int(key string, default int) -> int",
+          "summary": "read a host-owned int (default on first read)"
+        },
+        {
+          "name": "set_int",
+          "sig": "set_int(key string, v int)",
+          "summary": "write it"
+        },
+        {
+          "name": "state_f",
+          "sig": "state_f(key string, default float) -> float",
+          "summary": "float variant"
+        },
+        {
+          "name": "set_f",
+          "sig": "set_f(key string, v float)",
+          "summary": "write it"
+        },
+        {
+          "name": "state_str",
+          "sig": "state_str(key string, default string) -> string",
+          "summary": "string variant"
+        },
+        {
+          "name": "set_str",
+          "sig": "set_str(key string, v string)",
+          "summary": "write it"
+        }
+      ]
+    },
+    {
+      "category": "input & time",
+      "fns": [
+        {
+          "name": "hovered",
+          "sig": "hovered(i int) -> bool",
+          "summary": "pointer is over element i (last frame's layout)"
+        },
+        {
+          "name": "pressed",
+          "sig": "pressed(i int) -> bool",
+          "summary": "button held after a press that started on i"
+        },
+        {
+          "name": "clicked",
+          "sig": "clicked(i int) -> bool",
+          "summary": "released this frame on i after pressing on i"
+        },
+        {
+          "name": "frame_no",
+          "sig": "frame_no() -> int",
+          "summary": "frames drawn since start"
+        },
+        {
+          "name": "animate",
+          "sig": "animate()",
+          "summary": "ask for another frame right away (otherwise the app sleeps until input)"
+        }
+      ]
+    },
+    {
+      "category": "keyboard & focus",
+      "fns": [
+        {
+          "name": "key",
+          "sig": "key(scancode int) -> bool",
+          "summary": "the key went down this frame (repeats included): K_RETURN, K_ESCAPE, K_BACKSPACE, K_TAB, K_DELETE, K_HOME, K_END, K_LEFT, K_RIGHT, K_UP, K_DOWN, K_PAGEUP, K_PAGEDOWN, K_A, K_C, K_N, K_S, K_V"
+        },
+        {
+          "name": "ctrl",
+          "sig": "ctrl() -> bool",
+          "summary": "Ctrl (or Cmd) is held"
+        },
+        {
+          "name": "shift",
+          "sig": "shift() -> bool",
+          "summary": "Shift is held"
+        },
+        {
+          "name": "focused",
+          "sig": "focused(key string) -> bool",
+          "summary": "the field with this key has keyboard focus"
+        },
+        {
+          "name": "focus",
+          "sig": "focus(key string)",
+          "summary": "give a field keyboard focus (e.g. after creating a note)"
+        },
+        {
+          "name": "blur",
+          "sig": "blur()",
+          "summary": "clear focus (Esc and clicks outside any field do this too)"
+        }
+      ]
+    },
+    {
+      "category": "window",
+      "fns": [
+        {
+          "name": "window_title",
+          "sig": "window_title(s string)",
+          "summary": "set the window title (no-op when unchanged)"
+        },
+        {
+          "name": "cursor",
+          "sig": "cursor(CURSOR_DEFAULT|CURSOR_TEXT|CURSOR_POINTER)",
+          "summary": "pointer shape for this frame (buttons and fields set it on hover)"
+        }
+      ]
+    },
+    {
+      "category": "format",
+      "fns": [
+        {
+          "name": "fmt2",
+          "sig": "fmt2(v float) -> string",
+          "summary": "two decimals, as Go's %.2f"
+        }
+      ]
+    }
   ],
-  "theme": {"C_BG": "0x16161AFF", "C_SURFACE": "0x202027FF", "C_TEXT": "0xEDEDF2FF", "C_MUTED": "0x9A9AA8FF", "C_ACCENT": "0x6E56CFFF", "C_BORDER": "0x33333DFF"},
+  "theme": {
+    "C_BG": "0x16161AFF",
+    "C_SURFACE": "0x202027FF",
+    "C_TEXT": "0xEDEDF2FF",
+    "C_MUTED": "0x9A9AA8FF",
+    "C_ACCENT": "0x6E56CFFF",
+    "C_BORDER": "0x33333DFF",
+    "C_SURFACE2": "0x2A2A33FF",
+    "C_INPUT": "0x111115FF",
+    "C_CODE": "0x0E0E12FF",
+    "C_DANGER": "0xE5484DFF"
+  },
   "gotchas": [
     "machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).",
     "MFL loops are `while cond { }`; there is no C-style for. Floats need a dot (16.0); int->float is float(i).",
     "Struct types are `type T struct { ... }` with one field per line.",
     "Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).",
     "Modifiers apply to the last element: call them right after the element (or right after end() for a container).",
-    "Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.",
-    "To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it."
+    "To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it.",
+    "State strings are per-frame copies: v := state_str(k, \"\") then set_str(k, v) is safe; keep long-lived text in the store, not in MFL globals.",
+    "Text editing has no selection yet (ctrl+a moves the caret to the end; ctrl+Backspace deletes a word). text_area does not soft-wrap.",
+    "Coordinates for --click are window pixels at scale 1: if you read a downscaled screenshot, scale back up before clicking.",
+    "grow(f) children split the free space with a zero basis (CSS flex: 1); fixed siblings keep their size."
   ],
   "example": "func view() {\n    n := state_int(\"count\", 0)\n    col()\n    fill()\n    center()\n    gap(16.0)\n        text(str(n), 56.0)\n        bold()\n        row()\n        gap(10.0)\n            if button(\"Increment\") { set_int(\"count\", n + 1) }\n            if button_ghost(\"Reset\") { set_int(\"count\", 0) }\n        end()\n    end()\n}\n"
 }

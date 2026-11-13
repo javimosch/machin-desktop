@@ -77,6 +77,23 @@ end()</code></pre>
 
       <h2>Painting order and culling</h2>
       <p>Elements are created in pre-order, so painting walks them in creation order: parents under children, later siblings over earlier ones. Anything entirely outside the window is skipped; wrapped text also skips lines below the window.</p>
-      <div class="callout warn"><b>Not yet</b>No clipping inside a container, no wheel/drag scrolling, no text input — that is milestone 2.5.</div>
+      <h2>Clipping, scrolling, overlays</h2>
+      <pre><code>scroll_view("list")      // a clipped column that scrolls with the wheel while hovered
+fill()
+gap(4.0)
+    // … as many children as you like …
+end()
+
+col()
+clip()                   // children are clipped to this element's rect
+    row()
+    size(8.0, 8.0)
+    radius(4.0)
+    bg(C_DANGER)
+    at(120.0, 4.0)       // out of the flow, pinned inside the parent's content box
+    end()
+end()</code></pre>
+      <p>Clips nest (each intersects its parent's) and are applied per instance in the shader, so they cost no extra draw calls. A scroll view keeps its offset in the state store under its key and clamps it to last frame's content height.</p>
+      <div class="callout warn"><b>Not yet</b>Drag-to-scroll and scrollbars, horizontal scrolling, text selection.</div>
       <p>Next: <a href="../hot-reload/">hot reload →</a> · all functions: <a href="../api/">API</a></p>
     </div>

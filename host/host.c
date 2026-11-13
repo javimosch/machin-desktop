@@ -39,7 +39,13 @@ typedef struct {
     uint8_t col[4];        // fill / glyph color (rgba)
     uint8_t bcol[4];       // border color
     float radius, border, kind, blur;  // kind: 0 rect, 1 glyph, 2 shadow
+    float cx0, cy0, cx1, cy1;          // clip rect (logical px); pixels outside are discarded
 } Inst;
+
+// Clip stack: each instance records the clip in force when it was pushed.
+#define CLIPS 64
+static float g_clip[CLIPS][4];
+static int g_nclip;
 
 static Inst* g_inst;
 static int g_wh_px_hint = 1 << 30;  // framebuffer height, for culling text lines
@@ -52,6 +58,10 @@ static Inst* push_inst(void) {
     }
     Inst* i = &g_inst[g_ninst++];
     memset(i, 0, sizeof *i);
+    if (g_nclip > 0) {
+        i->cx0 = g_clip[g_nclip - 1][0]; i->cy0 = g_clip[g_nclip - 1][1];
+        i->cx1 = g_clip[g_nclip - 1][2]; i->cy1 = g_clip[g_nclip - 1][3];
+    } else { i->cx0 = -1e9f; i->cy0 = -1e9f; i->cx1 = 1e9f; i->cy1 = 1e9f; }
     return i;
 }
 
@@ -284,6 +294,19 @@ void mdk_rect(float x, float y, float w, float h, int64_t rgba, float radius, fl
     set_rgba(in->col, rgba); set_rgba(in->bcol, brgba);
     in->radius = radius; in->border = border; in->kind = 0;
 }
+// Push a clip rect, intersected with the current one; pop restores it.
+void mdk_clip_push(float x, float y, float w, float h) {
+    float a = x, b = y, c = x + w, d = y + h;
+    if (g_nclip > 0) {
+        float* t = g_clip[g_nclip - 1];
+        if (a < t[0]) a = t[0]; if (b < t[1]) b = t[1];
+        if (c > t[2]) c = t[2]; if (d > t[3]) d = t[3];
+    }
+    if (g_nclip < CLIPS) { g_clip[g_nclip][0] = a; g_clip[g_nclip][1] = b; g_clip[g_nclip][2] = c; g_clip[g_nclip][3] = d; }
+    g_nclip++;
+}
+void mdk_clip_pop(void) { if (g_nclip > 0) g_nclip--; }
+
 void mdk_shadow(float x, float y, float w, float h, int64_t rgba, float radius, float blur) {
     Inst* in = push_inst();
     in->x = x - blur; in->y = y - blur; in->w = w + 2 * blur; in->h = h + 2 * blur;
@@ -311,6 +334,30 @@ int64_t mdk_mouse_released(void) { return g_mreleased; }
 int64_t mdk_key_pressed(int64_t sc) { return (sc >= 0 && sc < 512) ? g_keys[sc] : 0; }
 double mdk_time(void) { return (double)SDL_GetTicksNS() / 1e9 - g_t0; }
 void mdk_animate(void) { g_anim = 1; }
+
+// Text typed this frame (UTF-8, IME-composed by SDL), modifier state,
+// clipboard, the pointer's shape, and the window's title/size.
+static char g_typed[1024];
+static size_t g_ntyped;
+const char* mdk_typed(void) { return g_typed; }
+int64_t mdk_mods(void) {  // 1 ctrl (or cmd), 2 shift, 4 alt
+    SDL_Keymod m = SDL_GetModState();
+    return ((m & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) ? 1 : 0) | ((m & SDL_KMOD_SHIFT) ? 2 : 0) | ((m & SDL_KMOD_ALT) ? 4 : 0);
+}
+static char* g_clipbuf;
+const char* mdk_clipboard(void) {
+    SDL_free(g_clipbuf);
+    g_clipbuf = SDL_GetClipboardText();
+    return str_at(mdk_str(g_clipbuf ? g_clipbuf : ""));
+}
+void mdk_set_clipboard(const char* s) { SDL_SetClipboardText(s); }
+static int g_cursor_want, g_cursor_have = -1;
+void mdk_cursor(int64_t kind) { g_cursor_want = (int)kind; }  // 0 default, 1 text, 2 pointer
+static SDL_Window* g_win;
+static char g_title[256];
+void mdk_set_title(const char* t) {
+    if (strncmp(g_title, t, sizeof g_title - 1)) { snprintf(g_title, sizeof g_title, "%s", t); SDL_SetWindowTitle(g_win, g_title); }
+}
 static int64_t g_frame_no;
 int64_t mdk_frame_no(void) { return g_frame_no; }
 
@@ -352,35 +399,46 @@ int64_t mdk_get_int(const char* k, int64_t d) { Slot* s = slot(k); if (!s->kind)
 void mdk_set_int(const char* k, int64_t v) { Slot* s = slot(k); s->kind = 1; s->i = v; }
 double mdk_get_f(const char* k, double d) { Slot* s = slot(k); if (!s->kind) { s->kind = 2; s->f = d; } return s->f; }
 void mdk_set_f(const char* k, double v) { Slot* s = slot(k); s->kind = 2; s->f = v; }
+// Strings returned to MFL are per-frame copies (freed with the frame's
+// string pool, as the frame's arena frees everything MFL derived from them):
+// the slot can be overwritten mid-frame without leaving MFL a dangling
+// pointer. set_str copies before freeing, so set_str(k, state_str(k)) is safe.
 const char* mdk_get_str(const char* k, const char* d) {
     Slot* s = slot(k);
     if (!s->kind) { s->kind = 3; s->s = strdup(d); }
-    return s->s ? s->s : "";
+    return str_at(mdk_str(s->s ? s->s : ""));
 }
-void mdk_set_str(const char* k, const char* v) { Slot* s = slot(k); s->kind = 3; free(s->s); s->s = strdup(v); }
+void mdk_set_str(const char* k, const char* v) {
+    Slot* s = slot(k);
+    char* nv = strdup(v ? v : "");
+    s->kind = 3; free(s->s); s->s = nv;
+}
 
 // ------------------------------------------------------------------- GL
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec4 a_rect; layout(location=1) in vec4 a_uv;\n"
     "layout(location=2) in vec4 a_col; layout(location=3) in vec4 a_bcol;\n"
-    "layout(location=4) in vec4 a_par;\n"
+    "layout(location=4) in vec4 a_par; layout(location=5) in vec4 a_clip;\n"
     "uniform vec2 u_screen;\n"
     "out vec2 v_local; out vec2 v_size; out vec2 v_uv; out vec4 v_col; out vec4 v_bcol; out vec4 v_par;\n"
+    "out vec2 v_pos; out vec4 v_clip;\n"
     "void main(){\n"
     "  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
     "  vec2 p = a_rect.xy + c * a_rect.zw;\n"
     "  v_local = c * a_rect.zw; v_size = a_rect.zw; v_uv = mix(a_uv.xy, a_uv.zw, c);\n"
-    "  v_col = a_col; v_bcol = a_bcol; v_par = a_par;\n"
+    "  v_col = a_col; v_bcol = a_bcol; v_par = a_par; v_pos = p; v_clip = a_clip;\n"
     "  gl_Position = vec4(p / u_screen * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
     "in vec2 v_local; in vec2 v_size; in vec2 v_uv; in vec4 v_col; in vec4 v_bcol; in vec4 v_par;\n"
+    "in vec2 v_pos; in vec4 v_clip;\n"
     "uniform sampler2D u_atlas; out vec4 o;\n"
     "float sdf(vec2 p, vec2 hs, float r){ vec2 q = abs(p) - hs + r;\n"
     "  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }\n"
     "void main(){\n"
+    "  if (v_pos.x < v_clip.x || v_pos.y < v_clip.y || v_pos.x >= v_clip.z || v_pos.y >= v_clip.w) discard;\n"
     "  float kind = v_par.z;\n"
     "  if (kind > 0.5 && kind < 1.5) { o = vec4(v_col.rgb, v_col.a * texture(u_atlas, v_uv).r); return; }\n"
     "  vec2 hs = v_size * 0.5; vec2 p = v_local - hs;\n"
@@ -421,7 +479,8 @@ static void gl_init(void) {
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, st, (void*)offsetof(Inst, col));
     glVertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, st, (void*)offsetof(Inst, bcol));
     glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, st, (void*)offsetof(Inst, radius));
-    for (int a = 0; a < 5; a++) { glEnableVertexAttribArray((GLuint)a); glVertexAttribDivisor((GLuint)a, 1); }
+    glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, st, (void*)offsetof(Inst, cx0));
+    for (int a = 0; a < 6; a++) { glEnableVertexAttribArray((GLuint)a); glVertexAttribDivisor((GLuint)a, 1); }
     glGenTextures(1, &g_atlas_tex); glBindTexture(GL_TEXTURE_2D, g_atlas_tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS, ATLAS, 0, GL_RED, GL_UNSIGNED_BYTE, g_atlas_px);
@@ -450,6 +509,10 @@ static void gl_draw(int fbw, int fbh, uint32_t clear) {
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(Inst) * (size_t)g_ninst), g_inst, GL_STREAM_DRAW);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, g_ninst);  // the whole frame: one call
 }
+
+#ifndef MDK_DEFAULT_TITLE
+#define MDK_DEFAULT_TITLE "machin"
+#endif
 
 // ------------------------------------------------------------- app module
 typedef void (*frame_fn)(void);
@@ -535,28 +598,56 @@ static void shot(const char* path, int fbw, int fbh) {
     free(px);
 }
 
-// Test hooks: --click X Y queues real SDL mouse events (one click per two
-// frames, through the normal input path); SIGUSR1 saves the next frame to
-// $MDK_SHOT (default /tmp/mdk-shot.ppm) without stopping the app.
+// Test hooks: scripted input through the real SDL event path, in order —
+//   --click X Y      press + release (two frames)
+//   --type "text"    an SDL text-input event
+//   --key NAME       a key press, e.g. Return, Backspace, Left, ctrl+s, shift+Home
+//   --wheel DY       a wheel event at the pointer
+// SIGUSR1 saves the next frame to $MDK_SHOT (default /tmp/mdk-shot.ppm).
 #include <signal.h>
 static volatile sig_atomic_t g_want_shot;
 static void on_usr1(int s) { (void)s; g_want_shot = 1; }
-static float g_clicks[64][2];
-static int g_nclicks, g_click_i, g_click_phase;
-static void feed_clicks(void) {
-    if (g_click_i >= g_nclicks) return;
+typedef struct { int kind; float x, y; char str[256]; } Action;  // 0 click, 1 type, 2 key, 3 wheel
+static Action g_acts[256];
+static int g_nacts, g_act_i, g_click_phase;
+static SDL_Keymod g_fake_mod;
+static int g_fake_mod_frame, g_frames_now;
+static void feed_actions(void) {
+    if (g_act_i >= g_nacts) return;
+    Action* a = &g_acts[g_act_i];
     SDL_Event e; memset(&e, 0, sizeof e);
-    float x = g_clicks[g_click_i][0], y = g_clicks[g_click_i][1];
-    e.type = SDL_EVENT_MOUSE_MOTION; e.motion.x = x; e.motion.y = y; SDL_PushEvent(&e);
-    memset(&e, 0, sizeof e);
-    e.type = g_click_phase ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_MOUSE_BUTTON_DOWN;
-    e.button.button = 1; e.button.x = x; e.button.y = y; e.button.down = !g_click_phase;
-    SDL_PushEvent(&e);
-    if (g_click_phase) g_click_i++;
-    g_click_phase = !g_click_phase;
+    if (a->kind == 0) {
+        e.type = SDL_EVENT_MOUSE_MOTION; e.motion.x = a->x; e.motion.y = a->y; SDL_PushEvent(&e);
+        memset(&e, 0, sizeof e);
+        e.type = g_click_phase ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_MOUSE_BUTTON_DOWN;
+        e.button.button = 1; e.button.x = a->x; e.button.y = a->y; e.button.down = !g_click_phase;
+        SDL_PushEvent(&e);
+        if (!g_click_phase) { g_click_phase = 1; return; }
+        g_click_phase = 0;
+    } else if (a->kind == 1) {
+        e.type = SDL_EVENT_TEXT_INPUT; e.text.text = SDL_strdup(a->str);  // leaked: test-only
+        SDL_PushEvent(&e);
+    } else if (a->kind == 2) {
+        char name[256]; snprintf(name, sizeof name, "%s", a->str);
+        SDL_Keymod mod = 0; char* k = name;
+        for (char* plus; (plus = strchr(k, '+')); k = plus + 1) {
+            *plus = 0;
+            if (!SDL_strcasecmp(k, "ctrl")) mod |= SDL_KMOD_LCTRL;
+            else if (!SDL_strcasecmp(k, "shift")) mod |= SDL_KMOD_LSHIFT;
+            else if (!SDL_strcasecmp(k, "alt")) mod |= SDL_KMOD_LALT;
+        }
+        SDL_Scancode sc = SDL_GetScancodeFromName(k);
+        if (sc == SDL_SCANCODE_UNKNOWN && strlen(k) == 1) sc = SDL_GetScancodeFromKey((SDL_Keycode)(unsigned char)SDL_tolower(k[0]), NULL);
+        g_fake_mod = mod; g_fake_mod_frame = g_frames_now;
+        SDL_SetModState(mod);
+        e.type = SDL_EVENT_KEY_DOWN; e.key.scancode = sc; e.key.down = true; e.key.mod = mod;
+        SDL_PushEvent(&e);
+    } else if (a->kind == 3) {
+        e.type = SDL_EVENT_MOUSE_WHEEL; e.wheel.y = a->x; SDL_PushEvent(&e);
+    }
+    g_act_i++;
 }
 
-// The bold sibling of a regular face path (Ubuntu-R -> Ubuntu-B, X.ttf -> X-Bold.ttf).
 // Benchmark recorder, the protocol of MyGo's benchmarks/: with MDK_BENCH=1
 // the app animates every frame; after BENCH_WARMUP frames it says "start",
 // and after BENCH_FRAMES more "done {frames,wallUs,p50Us,p99Us,maxUs}",
@@ -627,7 +718,11 @@ static const char* find_font(void) {
 }
 
 int main(int argc, char** argv) {
-    const char* app = NULL; const char* title = "machin";
+    const char* app = NULL; const char* title = getenv("MDK_TITLE") ? getenv("MDK_TITLE") : MDK_DEFAULT_TITLE;
+    if (getenv("MDK_SIZE")) sscanf(getenv("MDK_SIZE"), "%dx%d", &g_ww, &g_wh);
+#ifdef MDK_DEFAULT_W
+    else { g_ww = MDK_DEFAULT_W; g_wh = MDK_DEFAULT_H; }
+#endif
     const char* shot_path = NULL; int shot_frames = 3, stats = 0, bench_frames = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--title") && i + 1 < argc) title = argv[++i];
@@ -636,8 +731,13 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) shot_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--stats")) stats = 1;
-        else if (!strcmp(argv[i], "--click") && i + 2 < argc && g_nclicks < 64) {
-            g_clicks[g_nclicks][0] = (float)atof(argv[++i]); g_clicks[g_nclicks][1] = (float)atof(argv[++i]); g_nclicks++;
+        else if (!strcmp(argv[i], "--click") && i + 2 < argc && g_nacts < 256) {
+            g_acts[g_nacts].kind = 0; g_acts[g_nacts].x = (float)atof(argv[++i]); g_acts[g_nacts].y = (float)atof(argv[++i]); g_nacts++;
+        } else if ((!strcmp(argv[i], "--type") || !strcmp(argv[i], "--key")) && i + 1 < argc && g_nacts < 256) {
+            g_acts[g_nacts].kind = argv[i][2] == 't' ? 1 : 2;
+            snprintf(g_acts[g_nacts].str, sizeof g_acts[g_nacts].str, "%s", argv[i + 1]); i++; g_nacts++;
+        } else if (!strcmp(argv[i], "--wheel") && i + 1 < argc && g_nacts < 256) {
+            g_acts[g_nacts].kind = 3; g_acts[g_nacts].x = (float)atof(argv[++i]); g_nacts++;
         }
         else app = argv[i];
     }
@@ -653,6 +753,8 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_Window* win = SDL_CreateWindow(title, g_ww, g_wh, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) { fprintf(stderr, "mdk: window: %s\n", SDL_GetError()); return 1; }
+    g_win = win;
+    SDL_StartTextInput(win);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) { fprintf(stderr, "mdk: gl: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetSwapInterval(1);
@@ -680,13 +782,15 @@ int main(int argc, char** argv) {
 
     signal(SIGUSR1, on_usr1);
     rec_init();
-    if (shot_path && g_nclicks) shot_frames += 2 * g_nclicks + 2;
+    if (shot_path && g_nacts) shot_frames += 2 * g_nacts + 3;
+    int debug_events = getenv("MDK_DEBUG_EVENTS") != NULL;
     int frames = 0, dirty = 1, running = 1;
     double reload_check = 0, cpu_acc = 0;
     int cpu_n = 0;
     while (running) {
         SDL_Event e;
-        if (frames >= 1) feed_clicks();
+        if (g_fake_mod && frames > g_fake_mod_frame) { g_fake_mod = 0; SDL_SetModState(0); }  // a scripted chord lasts one frame
+        if (frames >= 1) feed_actions();
         if (g_want_shot) dirty = 1;
         // Idle: a release build sleeps until an event (no wake-ups at all);
         // dev wakes 5x a second to look for a rebuilt module.
@@ -695,7 +799,7 @@ int main(int argc, char** argv) {
 #else
         int idle_ms = 200;
 #endif
-        int timeout = (dirty || g_anim || shot_path || bench_frames || g_click_i < g_nclicks) ? 0 : idle_ms;
+        int timeout = (dirty || g_anim || shot_path || bench_frames || g_act_i < g_nacts) ? 0 : idle_ms;
         int anim = g_anim || shot_path != NULL;  /* a screenshot run renders every frame */
         g_anim = 0;
         int got = timeout ? SDL_WaitEventTimeout(&e, timeout) : SDL_PollEvent(&e);  /* -1 = wait forever */
@@ -706,10 +810,16 @@ int main(int argc, char** argv) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN: if (e.button.button == 1) { g_mdown = 1; g_mpressed = 1; g_mx = e.button.x; g_my = e.button.y; g_px = g_mx; g_py = g_my; } break;
             case SDL_EVENT_MOUSE_BUTTON_UP: if (e.button.button == 1) { g_mdown = 0; g_mreleased = 1; } break;
             case SDL_EVENT_MOUSE_WHEEL: g_wheel += e.wheel.y; break;
+            case SDL_EVENT_TEXT_INPUT: {
+                size_t n = strlen(e.text.text);
+                if (g_ntyped + n < sizeof g_typed) { memcpy(g_typed + g_ntyped, e.text.text, n); g_ntyped += n; g_typed[g_ntyped] = 0; }
+                break;
+            }
             case SDL_EVENT_KEY_DOWN: if (e.key.scancode < 512) g_keys[e.key.scancode] = 1;
-                if (e.key.scancode == SDL_SCANCODE_ESCAPE) running = 0; break;
+                break;
             case SDL_EVENT_WINDOW_RESIZED: break;
             }
+            if (debug_events) fprintf(stderr, "mdk: event 0x%x\n", e.type);  // MDK_DEBUG_EVENTS=1
             dirty = 1;
             got = SDL_PollEvent(&e);
         }
@@ -749,8 +859,19 @@ int main(int argc, char** argv) {
         if (frames == 0 && stats) fprintf(stderr, "mdk: first frame %.1f ms after start, %d instances\n", (c1 - t_start) / 1e6, g_ninst);
         g_mpressed = g_mreleased = 0; g_wheel = 0;
         memset(g_keys, 0, sizeof g_keys);
+        g_ntyped = 0; g_typed[0] = 0;
+        if (g_cursor_want != g_cursor_have) {
+            static SDL_Cursor* cur[3];
+            SDL_SystemCursor ids[3] = {SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_TEXT, SDL_SYSTEM_CURSOR_POINTER};
+            int k = g_cursor_want >= 0 && g_cursor_want < 3 ? g_cursor_want : 0;
+            if (!cur[k]) cur[k] = SDL_CreateSystemCursor(ids[k]);
+            SDL_SetCursor(cur[k]);
+            g_cursor_have = g_cursor_want;
+        }
+        g_cursor_want = 0;
         frames++;
         g_frame_no++;
+        g_frames_now = frames;
         if (g_atlas_full) { g_atlas_full = 0; atlas_reset(); dirty = 1; }
         if (shot_path && frames >= shot_frames) { glFinish(); shot(shot_path, fbw, fbh); break; }
         if (g_want_shot) {

@@ -62,12 +62,14 @@ func view() {
 
 ## API at a glance
 
-containers `col row end spacer vlist(n,row_h,scroll)->first,count` · content
-`text(s,size) para(s,size) label(s)` · widgets `button button_ghost button_styled` · layout
-`fill fillw fillh width height size pad padxy gap grow align(A_*) justify(J_*) center
-scroll_y` · style `bg fg font bold radius border shadow` (colors `0xRRGGBBAA`) · state
-`state_int set_int state_f set_f state_str set_str` · input `hovered pressed clicked
-frame_no animate` · format `fmt2`. Full signatures: `./mdk guide` or
+containers `col row end spacer vlist scroll_view(key) card` · content `text para label
+md_view(src)` · widgets `button button_ghost button_styled text_field(key,ph)
+text_area(key,ph) nav_item list_item avatar badge divider` · layout `fill fillw fillh width
+height size pad padxy gap grow align(A_*) justify(J_*) center clip at(x,y) scroll_y` · style
+`bg fg font bold radius border shadow` (colors `0xRRGGBBAA`) · state `state_int set_int
+state_f set_f state_str set_str` · keyboard `key(K_*) ctrl shift focus focused blur` ·
+input `hovered pressed clicked frame_no animate` · window `window_title cursor` · format
+`fmt2`. A real app to copy from: `apps/notes` (dashboard, editor, settings, `.md` storage). Full signatures: `./mdk guide` or
 https://javimosch.github.io/machin-desktop/api/llms.txt
 
 ## MFL reminders that bite in UI code
@@ -78,8 +80,12 @@ https://javimosch.github.io/machin-desktop/api/llms.txt
 - machin typechecks reachably — an error in a function `view()` never calls won't fail
   the build.
 - Alpha `00` is invisible: `bg(0x6E56CF00)` draws nothing.
-- No clipping, wheel scrolling or text input yet (milestone 2.5): keep content in the
-  window, use `vlist` for long lists.
+- Text input exists (`text_field`, `text_area`) but no selection yet, and `text_area`
+  doesn't soft-wrap. Long content: `scroll_view(key)` or `vlist`.
+- `state_str` returns a per-frame copy; `set_str(k, state_str(k, ""))` is safe.
+- Script input for verification: `./mdk shot app out.ppm --click X Y --type "text" --key Return
+  --key ctrl+a --wheel -3` (window pixels at scale 1 — don't use coordinates read off a
+  downscaled screenshot).
 
 ## Working on mdk itself
 

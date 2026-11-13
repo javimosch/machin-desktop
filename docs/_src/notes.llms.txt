@@ -1,0 +1,52 @@
+# Notes — the mdk dogfood app
+
+A micro-SaaS-style desktop dashboard for personal markdown notes, built with mdk in MFL (apps/notes: ~650 lines of MFL on top of the framework).
+
+```
+./mdk dev apps/notes
+./mdk build apps/notes -o notes && ./notes
+```
+
+## Features
+
+- Home: "Good <time of day>, <nickname>", stat cards (notes, words, latest edit), cards for the 6 most recent notes
+- Notes: searchable list (titles + contents), editor (text_area) with Edit / Split / Preview modes, live md_view preview, two-step delete
+- Autosave: every edit writes the note's .md file
+- Settings: nickname (text_field) with generated avatar, accent color swatches theming the app, storage path
+- Shortcuts: ctrl+n new note, ctrl+v paste, ctrl+Backspace delete word, Esc leaves a field
+
+## Storage
+
+```
+$MDK_NOTES_DIR (default ~/.local/share/mdk-notes)/
+  profile.txt            nickname=... / accent=<rgba int>
+  notes/<created-ms>.md  one file per note; title = first line without leading #
+```
+
+Titles / word counts / snippets cached in the host state store (t:<id>, w:<id>, s:<id>) and refreshed on save.
+
+## Files
+
+- apps/notes/app.src — UI (sidebar, home, notes, settings)
+- apps/notes/data.src — storage (list_dir/read_file/write_file/remove), title/snippet/word count, profile
+- apps/notes/app.conf — title=Notes, size=1180x760
+
+## Verify it like an agent
+
+```
+MDK_NOTES_DIR=/tmp/notes-test ./mdk shot apps/notes /tmp/n.ppm --frames 4 \
+  --click 69 146 --click 478 36 --type "Groceries" --key Return --key Return --type "- [ ] oat milk"
+convert /tmp/n.ppm /tmp/n.png && cat /tmp/notes-test/notes/*.md
+```
+
+(window coordinates at 1180x760: sidebar "Notes" = 69,146; "+ New" = 478,36; editor first line ~ 640,98)
+
+## Found by dogfooding
+
+- needed text input, focus, clipping, scroll views, overlays (built for it)
+- fixed a use-after-free: set_str(k, state_str(k)) freed the slot before copying; state strings are now per-frame copies
+- grow() now has a zero basis (CSS flex: 1); growing row children are measured at the width they will get
+
+## Next
+
+Notion import (Notion "Markdown & CSV" export = zip of .md files), text selection, soft-wrap editing, inline marks in preview, tags/pinning via front-matter.

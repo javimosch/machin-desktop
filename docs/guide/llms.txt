@@ -57,13 +57,14 @@ func view() {
 5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
 6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
 7. Widgets return their event for this frame: if button("Save") { ... }.
+8. Window title and default size: an optional app.conf in the app dir (title=Notes, size=1180x760); window_title(s) changes the title at run time.
 
 ## Commands
 
 - `./mdk new <appdir>` — scaffold an app directory with app.src (a counter)
 - `./mdk dev <appdir>` — build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame
 - `./mdk build <appdir> [-o out]` — one release binary with the app linked in (no reload, sleeps when idle)
-- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y]...` — render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view
+- `./mdk shot <appdir> out.ppm [--size W H] [--frames N] [--click X Y] [--type TEXT] [--key NAME] [--wheel DY]...` — render N frames after a script of real SDL input events (in order: clicks, text input, keys like Return / Backspace / ctrl+a / shift+Home, wheel), then save a screenshot; convert out.ppm out.png to view
 - `./mdk check <appdir>` — typecheck the app with the framework (machin encode), no window
 - `./mdk guide` — print this JSON
 

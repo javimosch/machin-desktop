@@ -1,0 +1,471 @@
+// Notes — the mdk dogfood app: a micro-SaaS-style dashboard for personal
+// markdown notes. Sidebar navigation, a home dashboard, a notes workspace
+// (searchable list + editor + live preview, autosaved to .md files), and
+// settings (nickname, accent color).
+
+var ACCENTS = []int{0x6E56CFFF, 0x1971C2FF, 0x0B7285FF, 0x2B8A3EFF, 0xE8590CFF, 0xC2255CFF}
+
+func boot() {
+    if state_int("_booted", 0) == 1 { return }
+    set_int("_booted", 1)
+    ensure_dirs()
+    load_profile()
+    if state_str("nick", "") == "" { set_str("nick", "Friend") }
+    if len(note_ids()) == 0 { seed_welcome() }
+}
+
+func seed_welcome() {
+    id := str(now_ms())
+    save_note(id, "# Welcome to Notes\n\nNotes are plain **markdown** files on your disk — this app is built with mdk, in machin.\n\n## Try it\n\n- [x] Open this note\n- [ ] Edit the text on the left, watch the preview on the right\n- [ ] Change your nickname in Settings\n\n> Everything autosaves to ~/.local/share/mdk-notes\n\n```\n./mdk dev apps/notes\n```\n")
+}
+
+func apply_theme() {
+    a := state_int("accent", 0)
+    if a != 0 {
+        C_ACCENT = a
+        C_ACCENT_HI = a
+        C_ACCENT_LO = a
+    }
+}
+
+func greeting() {
+    h := time_fields(now())[3]
+    if h < 5 { return "Good night" }
+    if h < 12 { return "Good morning" }
+    if h < 18 { return "Good afternoon" }
+    return "Good evening"
+}
+
+func open_note(id) {
+    set_str("page", "notes")
+    set_str("sel", id)
+    src := read_file(note_path(id))
+    set_str("buf", src)
+    set_str("saved", src)
+    set_int("buf:caret", len(src))
+    set_f("buf:scroll", 0.0)
+    set_f("preview:scroll", 0.0)
+    set_int("confirm_del", 0)
+}
+
+func create_and_open() {
+    id := new_note()
+    open_note(id)
+    focus("buf")
+}
+
+// ---------------------------------------------------------------- sidebar
+func sidebar() {
+    page := state_str("page", "home")
+    col()
+    width(232.0)
+    fillh()
+    bg(0x111115FF)
+    padxy(14.0, 18.0)
+    gap(4.0)
+        row()
+        gap(10.0)
+        align(A_CENTER)
+        padxy(6.0, 0.0)
+            row()
+            size(30.0, 30.0)
+            radius(8.0)
+            bg(C_ACCENT)
+            center()
+            text("N", 16.0)
+            bold()
+            fg(0xFFFFFFFF)
+            end()
+            text("Notes", 17.0)
+            bold()
+            spacer()
+            badge("mdk", 0x33333DFF)
+        end()
+        row()
+        height(18.0)
+        end()
+        text("WORKSPACE", 11.0)
+        bold()
+        fg(0x6A6A78FF)
+        padxy(8.0, 6.0)
+        if nav_item("Home", page == "home") { set_str("page", "home") }
+        if nav_item("Notes", page == "notes") {
+            set_str("page", "notes")
+            if state_str("sel", "") == "" {
+                ids := note_ids()
+                if len(ids) > 0 { open_note(ids[0]) }
+            }
+        }
+        if nav_item("Settings", page == "settings") { set_str("page", "settings") }
+        spacer()
+        row()
+        fillw()
+        padxy(8.0, 8.0)
+        gap(10.0)
+        align(A_CENTER)
+        radius(10.0)
+        bg(C_SURFACE)
+        border(1.0, C_BORDER)
+            avatar(state_str("nick", "Friend"), 34.0)
+            col()
+            gap(1.0)
+                text(state_str("nick", "Friend"), 14.0)
+                bold()
+                text("Personal workspace", 12.0)
+                fg(C_MUTED)
+            end()
+        end()
+    end()
+}
+
+// ---------------------------------------------------------------- home
+func stat_card(label_s, value_s, sub_s) {
+    card()
+    grow(1.0)
+        text(label_s, 12.0)
+        fg(C_MUTED)
+        text(value_s, 30.0)
+        bold()
+        text(sub_s, 12.0)
+        fg(C_MUTED)
+    end()
+}
+
+func page_home() {
+    ids := note_ids()
+    words := 0
+    k := 0
+    while k < len(ids) { words = words + note_words(ids[k])  k = k + 1 }
+    sv := scroll_view("home")
+    fill()
+    padxy(36.0, 32.0)
+    gap(22.0)
+        col()
+        gap(4.0)
+            text(greeting() + ", " + state_str("nick", "Friend"), 30.0)
+            bold()
+            text("Here's your workspace at a glance.", 15.0)
+            fg(C_MUTED)
+        end()
+        row()
+        fillw()
+        gap(16.0)
+            stat_card("NOTES", str(len(ids)), "markdown files on disk")
+            stat_card("WORDS", str(words), "across every note")
+            last := "—"
+            if len(ids) > 0 { last = ago(note_time(ids[0])) }
+            stat_card("LATEST", last, "most recent note")
+        end()
+        row()
+        fillw()
+        align(A_CENTER)
+            text("Recent notes", 18.0)
+            bold()
+            spacer()
+            if button("+ New note") { create_and_open() }
+        end()
+        if len(ids) == 0 {
+            card()
+            fillw()
+            center()
+            padxy(18.0, 40.0)
+                text("No notes yet", 18.0)
+                bold()
+                text("Create your first note — it's a markdown file you own.", 14.0)
+                fg(C_MUTED)
+            end()
+        }
+        // up to 6 recent notes, three per row
+        r := 0
+        while r * 3 < len(ids) && r < 2 {
+            row()
+            fillw()
+            gap(16.0)
+            c := 0
+            while c < 3 {
+                n := r * 3 + c
+                if n < len(ids) {
+                    id := ids[n]
+                    ci := card()
+                    grow(1.0)
+                    if hovered(ci) {
+                        border(1.0, C_ACCENT)
+                        mdk_cursor(2)
+                    }
+                    if clicked(ci) { open_note(id) }
+                        text(note_title(id), 15.0)
+                        bold()
+                        sn := note_snippet(id)
+                        if sn == "" { sn = "Empty note" }
+                        para(sn, 13.0)
+                        fg(C_MUTED)
+                        text(ago(note_time(id)) + "  ·  " + str(note_words(id)) + " words", 12.0)
+                        fg(0x6A6A78FF)
+                    end()
+                } else {
+                    row()
+                    grow(1.0)
+                    end()
+                }
+                c = c + 1
+            }
+            end()
+            r = r + 1
+        }
+    end()
+}
+
+// ---------------------------------------------------------------- notes
+func note_list() {
+    q := to_lower(trim(state_str("search", "")))
+    col()
+    width(300.0)
+    fillh()
+    bg(0x18181DFF)
+    padxy(14.0, 18.0)
+    gap(12.0)
+        row()
+        fillw()
+        align(A_CENTER)
+            text("Notes", 18.0)
+            bold()
+            spacer()
+            if button("+ New") { create_and_open() }
+        end()
+        text_field("search", "Search notes…")
+        fillw()
+        sv := scroll_view("list")
+        fill()
+        gap(4.0)
+            ids := note_ids()
+            sel := state_str("sel", "")
+            shown := 0
+            k := 0
+            while k < len(ids) {
+                id := ids[k]
+                t := note_title(id)
+                if q == "" || contains(to_lower(t), q) || contains(to_lower(note_snippet(id)), q) {
+                    if list_item(t, ago(note_time(id)) + "  ·  " + str(note_words(id)) + " words", id == sel) { open_note(id) }
+                    shown = shown + 1
+                }
+                k = k + 1
+            }
+            if shown == 0 {
+                text("No matching notes", 13.0)
+                fg(C_MUTED)
+                padxy(12.0, 8.0)
+            }
+        end()
+    end()
+}
+
+func mode_button(label_s, m) {
+    cur := state_str("mode", "split")
+    i := row()
+    padxy(12.0, 6.0)
+    radius(6.0)
+    if cur == m { bg(C_SURFACE2) } else if hovered(i) { bg(0x1F1F26FF) }
+    if hovered(i) { mdk_cursor(2) }
+    text(label_s, 13.0)
+    if cur != m { fg(C_MUTED) }
+    end()
+    if clicked(i) { set_str("mode", m) }
+}
+
+func editor() {
+    sel := state_str("sel", "")
+    col()
+    fill()
+    padxy(24.0, 20.0)
+    gap(14.0)
+    if sel == "" {
+        col()
+        fill()
+        center()
+        gap(10.0)
+            text("Select a note, or create one", 18.0)
+            bold()
+            if button("+ New note") { create_and_open() }
+        end()
+        end()
+        return 0
+    }
+        v := state_str("buf", "")
+        row()
+        fillw()
+        align(A_CENTER)
+        gap(12.0)
+            col()
+            gap(3.0)
+            grow(1.0)
+            clip()
+                text(title_of(v), 22.0)
+                bold()
+                status := "saved"
+                if v != state_str("saved", "") { status = "saving…" }
+                text(ago(note_time(sel)) + "  ·  " + str(word_count(v)) + " words  ·  " + status, 12.0)
+                fg(C_MUTED)
+            end()
+            row()
+            padxy(3.0, 3.0)
+            radius(8.0)
+            bg(C_SURFACE)
+            border(1.0, C_BORDER)
+            gap(2.0)
+                mode_button("Edit", "edit")
+                mode_button("Split", "split")
+                mode_button("Preview", "preview")
+            end()
+            if state_int("confirm_del", 0) == 1 {
+                if button_styled("Confirm delete", C_DANGER, 0xF2555AFF, 0xC93C41FF) {
+                    delete_note(sel)
+                    set_str("sel", "")
+                    set_int("confirm_del", 0)
+                    ids := note_ids()
+                    if len(ids) > 0 { open_note(ids[0]) }
+                }
+                if button_ghost("Cancel") { set_int("confirm_del", 0) }
+            } else {
+                if button_ghost("Delete") { set_int("confirm_del", 1) }
+            }
+        end()
+        mode := state_str("mode", "split")
+        row()
+        fill()
+        gap(16.0)
+            if mode != "preview" {
+                col()
+                fill()
+                text_area("buf", "Start writing markdown…")
+                end()
+            }
+            if mode != "edit" {
+                pv := scroll_view("preview")
+                fill()
+                padxy(22.0, 18.0)
+                bg(C_SURFACE)
+                radius(10.0)
+                border(1.0, C_BORDER)
+                    md_view(state_str("buf", ""))
+                end()
+            }
+        end()
+    end()
+    // autosave: the editor wrote this frame's edits to "buf"
+    nv := state_str("buf", "")
+    if nv != state_str("saved", "") {
+        save_note(sel, nv)
+        set_str("saved", nv)
+    }
+    mdk_set_title(title_of(nv) + " — Notes")
+    return 0
+}
+
+func page_notes() {
+    row()
+    fill()
+        note_list()
+        row()
+        width(1.0)
+        fillh()
+        bg(C_BORDER)
+        end()
+        editor()
+    end()
+}
+
+// ---------------------------------------------------------------- settings
+func page_settings() {
+    sv := scroll_view("settings")
+    fill()
+    padxy(36.0, 32.0)
+    gap(20.0)
+        text("Settings", 30.0)
+        bold()
+        card()
+        width(620.0)
+        gap(14.0)
+            text("Profile", 17.0)
+            bold()
+            row()
+            gap(16.0)
+            align(A_CENTER)
+            fillw()
+                avatar(state_str("nick", "Friend"), 56.0)
+                col()
+                gap(6.0)
+                grow(1.0)
+                    text("Nickname", 12.0)
+                    fg(C_MUTED)
+                    before := state_str("nick", "")
+                    v := text_field("nick", "What should we call you?")
+                    fillw()
+                    if v != before { save_profile() }
+                end()
+            end()
+        end()
+        card()
+        width(620.0)
+        gap(14.0)
+            text("Accent color", 17.0)
+            bold()
+            row()
+            gap(12.0)
+            k := 0
+            while k < len(ACCENTS) {
+                c := ACCENTS[k]
+                i := row()
+                size(34.0, 34.0)
+                radius(17.0)
+                bg(c)
+                if c == C_ACCENT { border(3.0, 0xFFFFFFFF) }
+                if hovered(i) { mdk_cursor(2) }
+                end()
+                if clicked(i) {
+                    set_int("accent", c)
+                    save_profile()
+                }
+                k = k + 1
+            }
+            end()
+        end()
+        card()
+        width(620.0)
+        gap(8.0)
+            text("Storage", 17.0)
+            bold()
+            text("Your notes are plain markdown files:", 14.0)
+            fg(C_MUTED)
+            row()
+            padxy(12.0, 8.0)
+            radius(8.0)
+            bg(C_CODE)
+            border(1.0, C_BORDER)
+                text(notes_dir(), 13.0)
+                fg(0xB8E0C8FF)
+            end()
+            text(str(len(note_ids())) + " notes  ·  coming soon: import from Notion", 13.0)
+            fg(C_MUTED)
+        end()
+    end()
+}
+
+// ---------------------------------------------------------------- root
+func view() {
+    boot()
+    apply_theme()
+    if ctrl() && key(K_N) { create_and_open() }
+    page := state_str("page", "home")
+    row()
+    fill()
+        sidebar()
+        if page == "notes" {
+            page_notes()
+        } else if page == "settings" {
+            page_settings()
+        } else {
+            page_home()
+        }
+    end()
+    if page != "notes" { mdk_set_title("Notes") }
+}

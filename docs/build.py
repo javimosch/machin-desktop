@@ -29,6 +29,7 @@ PAGES = [
     ("benchmarks", "Benchmarks", "Benchmarks: mdk vs MyGo", "MyGo's own scenes, same machine, both on the GPU — numbers, method, caveats, how to reproduce."),
     ("api", "API", "API reference", "Every framework function: containers, content, widgets, layout, style, state, input, format."),
     ("internals", "Internals", "Internals", "Host ABI, element records, the one-call renderer, text shaping cache, memory model."),
+    ("notes", "Notes app", "Notes — the dogfood app", "A micro-SaaS-style markdown notes dashboard built with mdk: nickname, stats, editor + live preview, autosave to .md files."),
     ("agents", "Agents", "Building mdk apps with an agent", "llms.txt, SKILL.md and `mdk guide`: everything a coding agent needs to build an mdk app first try."),
 ]
 

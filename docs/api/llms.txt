@@ -1,4 +1,4 @@
-# mdk API reference (v0.2.0)
+# mdk API reference (v0.3.0)
 
 Generated from framework/guide.json (same data as `./mdk guide`).
 
@@ -11,6 +11,7 @@ Generated from framework/guide.json (same data as `./mdk guide`).
 5. Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.
 6. Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().
 7. Widgets return their event for this frame: if button("Save") { ... }.
+8. Window title and default size: an optional app.conf in the app dir (title=Notes, size=1180x760); window_title(s) changes the title at run time.
 
 ## Functions
 
@@ -21,18 +22,28 @@ Generated from framework/guide.json (same data as `./mdk guide`).
 - `end()` — close the innermost open container; following modifiers target it
 - `spacer() -> int` — an empty element with grow 1: pushes siblings apart
 - `vlist(n int, row_h float, scroll float) -> (first int, count int)` — open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()
+- `scroll_view(key string) -> int` — open a vertical container that clips its children and scrolls with the wheel while hovered; offset kept in the state store under key; close with end()
+- `card() -> int` — open a surface card (bg, radius 12, border, padding 18, gap 8); close with end()
 
 ### content
 
 - `text(s string, size float) -> int` — one line of text at size px (shaped with HarfBuzz, cached)
 - `para(s string, size float) -> int` — a paragraph: wraps at spaces to the width its container gives it
 - `label(s string) -> int` — text at the current element's font size
+- `md_view(src string) -> int` — render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, > quotes, ``` code fences, --- rules, paragraphs (inline marks shown as typed)
 
 ### widgets
 
 - `button(s string) -> bool` — accent button; true on the frame it is clicked (press and release inside)
 - `button_ghost(s string) -> bool` — outlined surface button; same semantics
 - `button_styled(s string, base int, hover int, pressed int) -> bool` — button with your own three colors
+- `text_field(key string, placeholder string) -> string` — single-line input; value and caret kept in the state store under key; click to focus, type (UTF-8/IME), Backspace/Delete/ctrl+Backspace, Left/Right/Home/End, ctrl+v paste
+- `text_area(key string, placeholder string) -> string` — multi-line editor filling its container: Return/Tab/Up/Down too; scrolls with the wheel and follows the caret; long lines are clipped (no soft wrap yet)
+- `nav_item(label string, active bool) -> bool` — sidebar entry, highlighted when active; true when clicked
+- `list_item(title string, sub string, active bool) -> bool` — two-line list entry; true when clicked
+- `avatar(name string, diameter float) -> int` — round avatar with initials, colored from the name
+- `badge(s string, rgba int) -> int` — small pill label
+- `divider() -> int` — 1 px horizontal rule
 
 ### layout
 
@@ -50,6 +61,8 @@ Generated from framework/guide.json (same data as `./mdk guide`).
 - `justify(J_START|J_CENTER|J_END|J_BETWEEN)` — children's main-axis distribution (when nothing grows)
 - `center()` — align + justify center
 - `scroll_y(px float)` — offset a vertical container's content by px
+- `clip()` — clip the last element's children to its rect
+- `at(x float, y float)` — take the last element out of the flow and pin it at (x, y) inside its parent's content box (overlays, carets, badges)
 
 ### style
 
@@ -78,6 +91,20 @@ Generated from framework/guide.json (same data as `./mdk guide`).
 - `frame_no() -> int` — frames drawn since start
 - `animate()` — ask for another frame right away (otherwise the app sleeps until input)
 
+### keyboard & focus
+
+- `key(scancode int) -> bool` — the key went down this frame (repeats included): K_RETURN, K_ESCAPE, K_BACKSPACE, K_TAB, K_DELETE, K_HOME, K_END, K_LEFT, K_RIGHT, K_UP, K_DOWN, K_PAGEUP, K_PAGEDOWN, K_A, K_C, K_N, K_S, K_V
+- `ctrl() -> bool` — Ctrl (or Cmd) is held
+- `shift() -> bool` — Shift is held
+- `focused(key string) -> bool` — the field with this key has keyboard focus
+- `focus(key string)` — give a field keyboard focus (e.g. after creating a note)
+- `blur()` — clear focus (Esc and clicks outside any field do this too)
+
+### window
+
+- `window_title(s string)` — set the window title (no-op when unchanged)
+- `cursor(CURSOR_DEFAULT|CURSOR_TEXT|CURSOR_POINTER)` — pointer shape for this frame (buttons and fields set it on hover)
+
 ### format
 
 - `fmt2(v float) -> string` — two decimals, as Go's %.2f
@@ -93,8 +120,11 @@ Ints 0xRRGGBBAA. Theme: C_BG, C_SURFACE, C_TEXT, C_MUTED, C_ACCENT (C_ACCENT_HI,
 - Struct types are `type T struct { ... }` with one field per line.
 - Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).
 - Modifiers apply to the last element: call them right after the element (or right after end() for a container).
-- Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.
 - To verify without a human: ./mdk shot <app> out.ppm --click X Y, then convert out.ppm out.png and look at it.
+- State strings are per-frame copies: v := state_str(k, "") then set_str(k, v) is safe; keep long-lived text in the store, not in MFL globals.
+- Text editing has no selection yet (ctrl+a moves the caret to the end; ctrl+Backspace deletes a word). text_area does not soft-wrap.
+- Coordinates for --click are window pixels at scale 1: if you read a downscaled screenshot, scale back up before clicking.
+- grow(f) children split the free space with a zero basis (CSS flex: 1); fixed siblings keep their size.
 
 ---
 HTML: https://javimosch.github.io/machin-desktop/api/ · site index: https://javimosch.github.io/machin-desktop/llms.txt

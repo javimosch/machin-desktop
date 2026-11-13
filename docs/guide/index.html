@@ -23,6 +23,7 @@
         <a href="../benchmarks/">Benchmarks</a>
         <a href="../api/">API</a>
         <a href="../internals/">Internals</a>
+        <a href="../notes/">Notes app</a>
         <a href="../agents/">Agents</a>
       </div>
       <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
@@ -94,7 +95,7 @@ cd machin-desktop
       </table>
 
       <h2>Commands</h2>
-      <table><tr><th>command</th><th>what it does</th></tr><tr><td><code>./mdk new &lt;appdir&gt;</code></td><td>scaffold an app directory with app.src (a counter)</td></tr><tr><td><code>./mdk dev &lt;appdir&gt;</code></td><td>build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame</td></tr><tr><td><code>./mdk build &lt;appdir&gt; [-o out]</code></td><td>one release binary with the app linked in (no reload, sleeps when idle)</td></tr><tr><td><code>./mdk shot &lt;appdir&gt; out.ppm [--size W H] [--frames N] [--click X Y]...</code></td><td>render N frames (clicks are real SDL events) and save a screenshot; convert out.ppm out.png to view</td></tr><tr><td><code>./mdk check &lt;appdir&gt;</code></td><td>typecheck the app with the framework (machin encode), no window</td></tr><tr><td><code>./mdk guide</code></td><td>print this JSON</td></tr></table>
+      <table><tr><th>command</th><th>what it does</th></tr><tr><td><code>./mdk new &lt;appdir&gt;</code></td><td>scaffold an app directory with app.src (a counter)</td></tr><tr><td><code>./mdk dev &lt;appdir&gt;</code></td><td>build the app as a .so, open the window, rebuild on every save; the window and state survive; build errors draw over the last good frame</td></tr><tr><td><code>./mdk build &lt;appdir&gt; [-o out]</code></td><td>one release binary with the app linked in (no reload, sleeps when idle)</td></tr><tr><td><code>./mdk shot &lt;appdir&gt; out.ppm [--size W H] [--frames N] [--click X Y] [--type TEXT] [--key NAME] [--wheel DY]...</code></td><td>render N frames after a script of real SDL input events (in order: clicks, text input, keys like Return / Backspace / ctrl+a / shift+Home, wheel), then save a screenshot; convert out.ppm out.png to view</td></tr><tr><td><code>./mdk check &lt;appdir&gt;</code></td><td>typecheck the app with the framework (machin encode), no window</td></tr><tr><td><code>./mdk guide</code></td><td>print this JSON</td></tr></table>
 
       <h2>Checking your work without a human</h2>
       <pre><code>./mdk check apps/hello                                   # typecheck only

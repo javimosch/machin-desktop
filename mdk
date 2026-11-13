@@ -27,6 +27,13 @@ mkdir -p "$BUILD"
 
 die() { echo "mdk: $*" >&2; exit 1; }
 
+# app.conf (optional, key=value): title=Notes  size=1180x760
+conf() { # appdir key default
+    local v=""
+    [[ -f "$1/app.conf" ]] && v="$(sed -n "s/^$2=//p" "$1/app.conf" | head -1)"
+    echo "${v:-$3}"
+}
+
 ensure_sdl() {
     [[ -f "$SDL_LIB" ]] && return
     echo "mdk: building vendored SDL3 $SDL_VER (static, video only)..." >&2
@@ -94,7 +101,7 @@ cmd_dev() {
     local name; name="$(basename "$dir")"
     build_so "$dir" || true
     [[ -f "$BUILD/$name.so" ]] || die "first build failed — fix the errors above"
-    "$host" "$BUILD/$name.so" --title "$name (dev)" "$@" &
+    MDK_SIZE="$(conf "$dir" size 480x360)" "$host" "$BUILD/$name.so" --title "$(conf "$dir" title "$name") (dev)" "$@" &
     MDK_HOST_PID=$!
     local pid=$MDK_HOST_PID
     trap 'kill "${MDK_HOST_PID:-}" 2>/dev/null || true' EXIT INT TERM
@@ -118,7 +125,10 @@ cmd_build() {
     local c; c="$BUILD/$(basename "$dir").release.c"
     emit_c "$dir" "$c"
     # shellcheck disable=SC2086
-    cc -O2 -DMDK_STATIC $SDL_INC $FT_FLAGS -c "$ROOT/host/host.c" -o "$BUILD/host.o"
+    local size; size="$(conf "$dir" size 480x360)"
+    cc -O2 -DMDK_STATIC -DMDK_DEFAULT_TITLE="\"$(conf "$dir" title "$(basename "$dir")")\"" \
+        -DMDK_DEFAULT_W="${size%x*}" -DMDK_DEFAULT_H="${size#*x}" \
+        $SDL_INC $FT_FLAGS -c "$ROOT/host/host.c" -o "$BUILD/host.o"
     # shellcheck disable=SC2086
     cc -O2 $CFLAGS_MFL -c "$c" -o "$BUILD/app.o"
     # shellcheck disable=SC2086
@@ -130,7 +140,7 @@ cmd_shot() {
     local dir="${1:?usage: mdk shot <appdir> out.ppm}" out="${2:?out.ppm}"; shift 2
     local host; host="$(host_dev)"
     build_so "$dir"
-    "$host" "$BUILD/$(basename "$dir").so" --shot "$out" "$@"
+    MDK_SIZE="$(conf "$dir" size 480x360)" "$host" "$BUILD/$(basename "$dir").so" --shot "$out" "$@"
 }
 
 cmd_new() {

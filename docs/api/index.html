@@ -23,6 +23,7 @@
         <a href="../benchmarks/">Benchmarks</a>
         <a href="../api/" class="on">API</a>
         <a href="../internals/">Internals</a>
+        <a href="../notes/">Notes app</a>
         <a href="../agents/">Agents</a>
       </div>
       <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
@@ -30,13 +31,13 @@
   </nav>
   <main>
     <div class="doc">
-      <div class="eyebrow">API · v0.2.0</div>
+      <div class="eyebrow">API · v0.3.0</div>
       <h1>API reference</h1>
       <p class="lead">Every function the framework gives your <code>view()</code>. Generated from <code>framework/guide.json</code> — the same data <code>./mdk guide</code> prints for agents.</p>
-      <p class="muted">Jump to: <a href="#containers">containers</a> · <a href="#content">content</a> · <a href="#widgets">widgets</a> · <a href="#layout">layout</a> · <a href="#style">style</a> · <a href="#state-survives-hot-reload">state</a> · <a href="#input-time">input &amp; time</a> · <a href="#format">format</a></p>
+      <p class="muted">Jump to: <a href="#containers">containers</a> · <a href="#content">content</a> · <a href="#widgets">widgets</a> · <a href="#layout">layout</a> · <a href="#style">style</a> · <a href="#state-survives-hot-reload">state</a> · <a href="#keyboard-focus">keyboard &amp; focus</a> · <a href="#window">window</a> · <a href="#input-time">input &amp; time</a> · <a href="#format">format</a></p>
 
       <h2>The app contract</h2>
-      <ol><li>An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).</li><li>Define exactly one <code>func view()</code>. It runs every frame that needs drawing (input, resize, reload, or animate()).</li><li>Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame&#x27;s temporaries are freed when it returns.</li><li>Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).</li><li>Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.</li><li>Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().</li><li>Widgets return their event for this frame: if button(&quot;Save&quot;) { ... }.</li></ol>
+      <ol><li>An app is a directory of .src files. mdk prepends framework/*.src and compiles them together with machin (encode concatenates files: that is the module system).</li><li>Define exactly one <code>func view()</code>. It runs every frame that needs drawing (input, resize, reload, or animate()).</li><li>Do not define main(). The framework exports mdk_frame, which wraps view() in arena { } so a frame&#x27;s temporaries are freed when it returns.</li><li>Keep state in the host store: state_int/set_int, state_f/set_f, state_str/set_str. It survives every hot reload; MFL globals do not (they reset on reload).</li><li>Never assign per-frame values to MFL globals: inside the frame arena, a global assignment promotes the value out of it and leaks every frame. Assigning a global once (a cache filled on first frame) is fine.</li><li>Build the UI top-down every frame: open containers with col()/row(), add content, close with end(). Modifiers (gap, bg, pad, ...) apply to the LAST created element, or to the container just closed by end().</li><li>Widgets return their event for this frame: if button(&quot;Save&quot;) { ... }.</li><li>Window title and default size: an optional app.conf in the app dir (title=Notes, size=1180x760); window_title(s) changes the title at run time.</li></ol>
 
       <h2>Functions</h2>
       <h3 id="containers">containers</h3>
@@ -46,18 +47,28 @@
 <tr><td><code>end()</code></td><td>close the innermost open container; following modifiers target it</td></tr>
 <tr><td><code>spacer() -&gt; int</code></td><td>an empty element with grow 1: pushes siblings apart</td></tr>
 <tr><td><code>vlist(n int, row_h float, scroll float) -&gt; (first int, count int)</code></td><td>open a virtualized list of n fixed-height rows scrolled to `scroll` px; build exactly rows first..first+count-1 (each height(row_h)), then end()</td></tr>
+<tr><td><code>scroll_view(key string) -&gt; int</code></td><td>open a vertical container that clips its children and scrolls with the wheel while hovered; offset kept in the state store under key; close with end()</td></tr>
+<tr><td><code>card() -&gt; int</code></td><td>open a surface card (bg, radius 12, border, padding 18, gap 8); close with end()</td></tr>
 </table>
 <h3 id="content">content</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
 <tr><td><code>text(s string, size float) -&gt; int</code></td><td>one line of text at size px (shaped with HarfBuzz, cached)</td></tr>
 <tr><td><code>para(s string, size float) -&gt; int</code></td><td>a paragraph: wraps at spaces to the width its container gives it</td></tr>
 <tr><td><code>label(s string) -&gt; int</code></td><td>text at the current element&#x27;s font size</td></tr>
+<tr><td><code>md_view(src string) -&gt; int</code></td><td>render block markdown: # ## ### headings, - * bullets, - [ ] / - [x] tasks, &gt; quotes, ``` code fences, --- rules, paragraphs (inline marks shown as typed)</td></tr>
 </table>
 <h3 id="widgets">widgets</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
 <tr><td><code>button(s string) -&gt; bool</code></td><td>accent button; true on the frame it is clicked (press and release inside)</td></tr>
 <tr><td><code>button_ghost(s string) -&gt; bool</code></td><td>outlined surface button; same semantics</td></tr>
 <tr><td><code>button_styled(s string, base int, hover int, pressed int) -&gt; bool</code></td><td>button with your own three colors</td></tr>
+<tr><td><code>text_field(key string, placeholder string) -&gt; string</code></td><td>single-line input; value and caret kept in the state store under key; click to focus, type (UTF-8/IME), Backspace/Delete/ctrl+Backspace, Left/Right/Home/End, ctrl+v paste</td></tr>
+<tr><td><code>text_area(key string, placeholder string) -&gt; string</code></td><td>multi-line editor filling its container: Return/Tab/Up/Down too; scrolls with the wheel and follows the caret; long lines are clipped (no soft wrap yet)</td></tr>
+<tr><td><code>nav_item(label string, active bool) -&gt; bool</code></td><td>sidebar entry, highlighted when active; true when clicked</td></tr>
+<tr><td><code>list_item(title string, sub string, active bool) -&gt; bool</code></td><td>two-line list entry; true when clicked</td></tr>
+<tr><td><code>avatar(name string, diameter float) -&gt; int</code></td><td>round avatar with initials, colored from the name</td></tr>
+<tr><td><code>badge(s string, rgba int) -&gt; int</code></td><td>small pill label</td></tr>
+<tr><td><code>divider() -&gt; int</code></td><td>1 px horizontal rule</td></tr>
 </table>
 <h3 id="layout">layout</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
@@ -75,6 +86,8 @@
 <tr><td><code>justify(J_START|J_CENTER|J_END|J_BETWEEN)</code></td><td>children&#x27;s main-axis distribution (when nothing grows)</td></tr>
 <tr><td><code>center()</code></td><td>align + justify center</td></tr>
 <tr><td><code>scroll_y(px float)</code></td><td>offset a vertical container&#x27;s content by px</td></tr>
+<tr><td><code>clip()</code></td><td>clip the last element&#x27;s children to its rect</td></tr>
+<tr><td><code>at(x float, y float)</code></td><td>take the last element out of the flow and pin it at (x, y) inside its parent&#x27;s content box (overlays, carets, badges)</td></tr>
 </table>
 <h3 id="style">style</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
@@ -103,6 +116,20 @@
 <tr><td><code>frame_no() -&gt; int</code></td><td>frames drawn since start</td></tr>
 <tr><td><code>animate()</code></td><td>ask for another frame right away (otherwise the app sleeps until input)</td></tr>
 </table>
+<h3 id="keyboard-focus">keyboard &amp; focus</h3>
+<table><tr><th>signature</th><th>what it does</th></tr>
+<tr><td><code>key(scancode int) -&gt; bool</code></td><td>the key went down this frame (repeats included): K_RETURN, K_ESCAPE, K_BACKSPACE, K_TAB, K_DELETE, K_HOME, K_END, K_LEFT, K_RIGHT, K_UP, K_DOWN, K_PAGEUP, K_PAGEDOWN, K_A, K_C, K_N, K_S, K_V</td></tr>
+<tr><td><code>ctrl() -&gt; bool</code></td><td>Ctrl (or Cmd) is held</td></tr>
+<tr><td><code>shift() -&gt; bool</code></td><td>Shift is held</td></tr>
+<tr><td><code>focused(key string) -&gt; bool</code></td><td>the field with this key has keyboard focus</td></tr>
+<tr><td><code>focus(key string)</code></td><td>give a field keyboard focus (e.g. after creating a note)</td></tr>
+<tr><td><code>blur()</code></td><td>clear focus (Esc and clicks outside any field do this too)</td></tr>
+</table>
+<h3 id="window">window</h3>
+<table><tr><th>signature</th><th>what it does</th></tr>
+<tr><td><code>window_title(s string)</code></td><td>set the window title (no-op when unchanged)</td></tr>
+<tr><td><code>cursor(CURSOR_DEFAULT|CURSOR_TEXT|CURSOR_POINTER)</code></td><td>pointer shape for this frame (buttons and fields set it on hover)</td></tr>
+</table>
 <h3 id="format">format</h3>
 <table><tr><th>signature</th><th>what it does</th></tr>
 <tr><td><code>fmt2(v float) -&gt; string</code></td><td>two decimals, as Go&#x27;s %.2f</td></tr>
@@ -112,7 +139,7 @@
       <p>Colors are ints <code>0xRRGGBBAA</code>. Theme constants at the top of <code>framework/ui.src</code>: <code>C_BG</code>, <code>C_SURFACE</code>, <code>C_TEXT</code>, <code>C_MUTED</code>, <code>C_ACCENT</code> (+ <code>C_ACCENT_HI</code>/<code>C_ACCENT_LO</code>), <code>C_BORDER</code>.</p>
 
       <h2>Gotchas</h2>
-      <ul><li>machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).</li><li>MFL loops are <code>while cond { }</code>; there is no C-style for. Floats need a dot (16.0); int-&gt;float is float(i).</li><li>Struct types are <code>type T struct { ... }</code> with one field per line.</li><li>Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).</li><li>Modifiers apply to the last element: call them right after the element (or right after end() for a container).</li><li>Text is clipped by nothing yet: keep content inside the window, or use vlist for long lists.</li><li>To verify without a human: ./mdk shot &lt;app&gt; out.ppm --click X Y, then convert out.ppm out.png and look at it.</li></ul>
+      <ul><li>machin typechecks reachably: an error in a function view() never calls does not fail the build (and draws no overlay).</li><li>MFL loops are <code>while cond { }</code>; there is no C-style for. Floats need a dot (16.0); int-&gt;float is float(i).</li><li>Struct types are <code>type T struct { ... }</code> with one field per line.</li><li>Colors are ints 0xRRGGBBAA; the alpha byte matters (0x...00 is invisible).</li><li>Modifiers apply to the last element: call them right after the element (or right after end() for a container).</li><li>To verify without a human: ./mdk shot &lt;app&gt; out.ppm --click X Y, then convert out.ppm out.png and look at it.</li><li>State strings are per-frame copies: v := state_str(k, &quot;&quot;) then set_str(k, v) is safe; keep long-lived text in the store, not in MFL globals.</li><li>Text editing has no selection yet (ctrl+a moves the caret to the end; ctrl+Backspace deletes a word). text_area does not soft-wrap.</li><li>Coordinates for --click are window pixels at scale 1: if you read a downscaled screenshot, scale back up before clicking.</li><li>grow(f) children split the free space with a zero basis (CSS flex: 1); fixed siblings keep their size.</li></ul>
     </div>
 
     <div class="agentbox">For agents: <a href="llms.txt">this page as llms.txt</a><a href="../llms.txt">site index llms.txt</a><a href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md">SKILL.md</a></div>

@@ -1,0 +1,230 @@
+// framework/widgets.src — dashboard building blocks: cards, nav items,
+// avatars, badges, dividers, and a markdown view.
+
+// a surface card; close with end()
+func card() {
+    i := col()
+    bg(C_SURFACE)
+    radius(12.0)
+    border(1.0, C_BORDER)
+    pad(18.0)
+    gap(8.0)
+    return i
+}
+
+func divider() {
+    i := row()
+    fillw()
+    height(1.0)
+    bg(C_BORDER)
+    end()
+    return i
+}
+
+// a sidebar entry: highlighted when active, true when clicked
+func nav_item(label, active) {
+    i := row()
+    fillw()
+    padxy(12.0, 9.0)
+    radius(8.0)
+    gap(10.0)
+    align(A_CENTER)
+    if active {
+        bg(C_SURFACE2)
+    } else if hovered(i) {
+        bg(0x1F1F26FF)
+    }
+    if hovered(i) { mdk_cursor(2) }
+    row()
+    size(6.0, 6.0)
+    radius(3.0)
+    if active { bg(C_ACCENT) } else { bg(0x55555FFF) }
+    end()
+    text(label, 14.0)
+    if !active { fg(C_MUTED) }
+    end()
+    return clicked(i)
+}
+
+// a clickable row/list entry with a title and a subtitle
+func list_item(title, sub, active) {
+    i := col()
+    fillw()
+    padxy(12.0, 10.0)
+    radius(8.0)
+    gap(2.0)
+    if active {
+        bg(C_SURFACE2)
+        border(1.0, C_ACCENT)
+    } else if hovered(i) {
+        bg(0x1F1F26FF)
+    }
+    if hovered(i) { mdk_cursor(2) }
+    text(title, 14.0)
+    if active { bold() }
+    text(sub, 12.0)
+    fg(C_MUTED)
+    end()
+    return clicked(i)
+}
+
+func initials(name) {
+    t := trim(name)
+    if t == "" { return "?" }
+    parts := split(t, " ")
+    out := to_upper(substr(parts[0], 0, 1))
+    if len(parts) > 1 && len(parts[len(parts) - 1]) > 0 { out = out + to_upper(substr(parts[len(parts) - 1], 0, 1)) }
+    return out
+}
+
+// a round avatar with initials, colored from the name
+func avatar(name, d) {
+    h := 0
+    bs := bytes(name)
+    j := 0
+    while j < len(name) { h = (h * 31 + byte_at(bs, j)) % 360  j = j + 1 }
+    palette := []int{0x6E56CFFF, 0x0B7285FF, 0xC2255CFF, 0x2B8A3EFF, 0xE8590CFF, 0x1971C2FF}
+    i := row()
+    size(d, d)
+    radius(d / 2.0)
+    center()
+    bg(palette[h % 6])
+    text(initials(name), d * 0.38)
+    bold()
+    fg(0xFFFFFFFF)
+    end()
+    return i
+}
+
+func badge(s, c) {
+    i := row()
+    padxy(8.0, 2.0)
+    radius(999.0)
+    bg(c)
+    text(s, 11.0)
+    bold()
+    fg(0xFFFFFFFF)
+    end()
+    return i
+}
+
+// ---- markdown ----
+// Block-level markdown: # ## ### headings, - * bullets, - [ ] / - [x]
+// tasks, > quotes, ``` code fences, --- rules, paragraphs. Inline marks
+// (**bold**, `code`, links) are shown as typed for now.
+func strip_prefix(s, p) { return substr(s, len(p), len(s)) }
+
+func starts(s, p) { return len(s) >= len(p) && substr(s, 0, len(p)) == p }
+
+func md_bullet(dot_c) {
+    row()
+    width(14.0)
+    padxy(0.0, 8.0)
+        row()
+        size(5.0, 5.0)
+        radius(2.5)
+        bg(dot_c)
+        end()
+    end()
+}
+
+func md_task(done) {
+    row()
+    width(22.0)
+    padxy(0.0, 3.0)
+        row()
+        size(14.0, 14.0)
+        radius(4.0)
+        center()
+        if done { bg(C_ACCENT) } else { border(1.5, 0x6A6A78FF) }
+        if done {
+            row()
+            size(6.0, 6.0)
+            radius(1.5)
+            bg(0xFFFFFFFF)
+            end()
+        }
+        end()
+    end()
+}
+
+func md_view(src) {
+    i := col()
+    fillw()
+    gap(6.0)
+    lines := split(src, "\n")
+    in_code := false
+    k := 0
+    while k < len(lines) {
+        l := lines[k]
+        t := trim(l)
+        if starts(t, "```") {
+            if !in_code {
+                col()
+                fillw()
+                bg(C_CODE)
+                radius(8.0)
+                padxy(14.0, 10.0)
+                gap(2.0)
+                border(1.0, C_BORDER)
+            } else {
+                end()
+            }
+            in_code = !in_code
+        } else if in_code {
+            text(l, 13.0)
+            fg(0xB8E0C8FF)
+        } else if starts(t, "### ") {
+            para(strip_prefix(t, "### "), 16.0)
+            bold()
+        } else if starts(t, "## ") {
+            para(strip_prefix(t, "## "), 20.0)
+            bold()
+        } else if starts(t, "# ") {
+            para(strip_prefix(t, "# "), 26.0)
+            bold()
+        } else if starts(t, "- [ ] ") || starts(t, "- [x] ") || starts(t, "- [X] ") {
+            done := !starts(t, "- [ ] ")
+            row()
+            fillw()
+            md_task(done)
+            para(substr(t, 6, len(t)), 14.0)
+            grow(1.0)
+            if done { fg(C_MUTED) }
+            end()
+        } else if starts(t, "- ") || starts(t, "* ") {
+            row()
+            fillw()
+            md_bullet(C_ACCENT)
+            para(substr(t, 2, len(t)), 14.0)
+            grow(1.0)
+            end()
+        } else if starts(t, "> ") {
+            row()
+            fillw()
+            gap(10.0)
+                row()
+                width(3.0)
+                fillh()
+                bg(C_ACCENT)
+                radius(1.5)
+                end()
+                para(strip_prefix(t, "> "), 14.0)
+                grow(1.0)
+                fg(C_MUTED)
+            end()
+        } else if t == "---" || t == "***" {
+            divider()
+        } else if t == "" {
+            row()
+            height(4.0)
+            end()
+        } else {
+            para(t, 14.0)
+        }
+        k = k + 1
+    }
+    if in_code { end() }
+    end()
+    return i
+}

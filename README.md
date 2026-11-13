@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/assets/logo.png" width="120" alt="mdk"></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-M2%20%C2%B7%20experimental-orange" alt="Status">
+  <img src="https://img.shields.io/badge/status-M2.5%20%C2%B7%20experimental-orange" alt="Status">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <img src="https://img.shields.io/badge/machin-%E2%89%A50.142-6E56CF" alt="machin">
   <img src="https://img.shields.io/badge/renderer-SDL3%20%2B%20GL%203.3-0B7285" alt="Renderer">
@@ -64,6 +64,28 @@ FreeType + HarfBuzz dev packages, OpenGL 3.3.
 3. **Broke it** — a typo in the view. machin's typechecker rejects it and the error is
    drawn **over the last good frame**, never a blank window. Fix it and the overlay
    clears, state intact.
+
+## Built with mdk: Notes
+
+A real app to keep the framework honest — a micro-SaaS-style markdown workspace in
+[`apps/notes`](apps/notes) (~650 lines of MFL): your nickname and avatar, a dashboard,
+search, an editor with a live preview, and autosave to plain `.md` files you own.
+[Tour →](https://javimosch.github.io/machin-desktop/notes/)
+
+<p align="center">
+  <img src="docs/assets/notes-home.png" alt="Notes home: greeting with nickname, stats, recent notes" width="49%">
+  <img src="docs/assets/notes-editor.png" alt="Notes editor: list, markdown source, live preview" width="49%">
+</p>
+
+```bash
+./mdk dev apps/notes                 # notes in ~/.local/share/mdk-notes (or $MDK_NOTES_DIR)
+./mdk build apps/notes -o notes      # 2.6 MB
+```
+
+Dogfooding it drove milestone 2.5 (text input, focus, clipping, scroll views, overlays)
+and found a real use-after-free in the state store — fixed, details on the
+[app page](https://javimosch.github.io/machin-desktop/notes/#what-dogfooding-found).
+Next: **import from Notion**.
 
 ## Benchmarks: mdk vs MyGo, same machine
 
@@ -159,18 +181,20 @@ reload.
 
 ## API
 
+Full reference: [javimosch.github.io/machin-desktop/api](https://javimosch.github.io/machin-desktop/api/) · machine-readable: `./mdk guide`.
+
 | | |
 |---|---|
-| **containers** | `col()` · `row()` · `end()` · `spacer()` · `vlist(n, row_h, scroll) → first, count` |
-| **content** | `text(s, size)` · `para(s, size)` (wraps) · `label(s)` |
-| **widgets** | `button(s) bool` · `button_ghost(s) bool` |
-| **layout** | `fill()` `fillw()` `fillh()` · `width(v)` `height(v)` `size(w, h)` · `pad(v)` `padxy(x, y)` · `gap(v)` · `grow(v)` · `align(A_START\|A_CENTER\|A_STRETCH\|A_END)` · `justify(J_START\|J_CENTER\|J_END\|J_BETWEEN)` · `center()` · `scroll_y(px)` |
+| **containers** | `col()` · `row()` · `end()` · `spacer()` · `scroll_view(key)` · `card()` · `vlist(n, row_h, scroll) → first, count` |
+| **content** | `text(s, size)` · `para(s, size)` (wraps) · `label(s)` · `md_view(src)` (block markdown) |
+| **widgets** | `button(s)` · `button_ghost(s)` · `text_field(key, placeholder)` · `text_area(key, placeholder)` · `nav_item` · `list_item` · `avatar` · `badge` · `divider` |
+| **layout** | `fill()` `fillw()` `fillh()` · `width` `height` `size` · `pad` `padxy` · `gap` · `grow` · `align(A_*)` · `justify(J_*)` · `center()` · `clip()` · `at(x, y)` |
 | **style** | `bg(rgba)` · `fg(rgba)` · `font(size)` · `bold()` · `radius(r)` · `border(w, rgba)` · `shadow(blur, rgba)` |
-| **state** (survives reload) | `state_int(k, d)` `set_int(k, v)` · `state_f` `set_f` · `state_str` `set_str` |
-| **input / time** | `hovered(i)` · `pressed(i)` · `clicked(i)` · `frame_no()` · `animate()` |
-| **format** | `fmt2(v)` — Go's `%.2f` |
+| **state** (survives reload) | `state_int` `set_int` · `state_f` `set_f` · `state_str` `set_str` |
+| **keyboard & focus** | `key(K_*)` · `ctrl()` · `shift()` · `focus(key)` · `focused(key)` · `blur()` |
+| **input / window** | `hovered(i)` · `pressed(i)` · `clicked(i)` · `frame_no()` · `animate()` · `window_title(s)` · `cursor(kind)` |
 
-Colors are `0xRRGGBBAA` ints; the theme lives in `C_BG`, `C_TEXT`, `C_MUTED`,
+Colors are `0xRRGGBBAA` ints; the theme lives in `C_BG`, `C_SURFACE`, `C_TEXT`, `C_MUTED`,
 `C_ACCENT`, … at the top of `framework/ui.src`.
 
 ## For agents
@@ -195,6 +219,8 @@ HTML from [`docs/`](docs/): each page is `docs/<page>/index.html` with its
 
 ```bash
 DISPLAY=:0 ./mdk shot examples/counter /tmp/c.ppm --click 198 236   # real SDL click events
+MDK_NOTES_DIR=/tmp/n ./mdk shot apps/notes /tmp/n.ppm --click 69 146 --click 478 36 --type "Groceries" --key Return
+                                                                  # scripted typing / keys / wheel
 kill -USR1 <mdk-host pid>     # screenshot a running dev window → $MDK_SHOT (/tmp/mdk-shot.ppm)
 MDK_SCENE=grid ./mdk shot examples/bench /tmp/g.ppm --size 800 600 --frames 30
 ```
@@ -203,7 +229,8 @@ MDK_SCENE=grid ./mdk shot examples/bench /tmp/g.ppm --size 800 600 --frames 30
 
 - [x] **M1** — MFL UI core, SDL3/GL host, one-draw-call renderer, hot reload with kept state, error overlay
 - [x] **M2** — MyGo's benchmark scenes side by side: shaping cache, word wrap, bold, virtual list, culling, zero-wake idle
-- [ ] **M2.5** — text input + IME, scroll views (wheel/drag), clipping, focus/keyboard
+- [x] **M2.5** — driven by the Notes app: text input (UTF-8/IME via SDL), focus, single- and multi-line editing, clipping, scroll views, overlays, cursors, app.conf, scripted input for tests
+- [ ] **M2.6** — Notes: import from Notion; text selection, soft-wrap editing, inline markdown marks
 - [ ] **M3** — inspector: click an element → its MFL `file:line` (agent-ready); widget set (checkbox, select, slider, table)
 - [ ] **M4** — webview windows (machweb + reactive wasm), menus / tray / dialogs, `SDL_gpu` backend, macOS + Windows builds, benchmarks on a Mac against MyGo's published numbers
 

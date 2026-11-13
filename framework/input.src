@@ -1,0 +1,302 @@
+// framework/input.src — keyboard, focus, scrolling and text editing.
+//
+// Focus is one host-owned string ("_focus" in the state store): the key of
+// the field that receives typing. A click on a field focuses it; a click
+// that no field claims, or Esc, clears it. Field values and caret offsets
+// also live in the state store, so an edit survives a hot reload mid-word.
+// Carets are byte offsets kept on UTF-8 boundaries. No selection yet.
+
+func key(sc) { return mdk_key_pressed(sc) != 0 }
+func ctrl() { return (mdk_mods() & 1) != 0 }
+func shift() { return (mdk_mods() & 2) != 0 }
+
+func focused(k) { return mdk_get_str("_focus", "") == k }
+func focus(k) {
+    mdk_set_str("_focus", k)
+    g_claimed = 1
+}
+func blur() { mdk_set_str("_focus", "") }
+
+// ---- UTF-8 helpers over byte offsets ----
+func is_cont(b) { return (b & 0xC0) == 0x80 }
+
+func prev_cp(bs, i) {
+    if i <= 0 { return 0 }
+    j := i - 1
+    while j > 0 && is_cont(byte_at(bs, j)) { j = j - 1 }
+    return j
+}
+
+func next_cp(bs, i, n) {
+    if i >= n { return n }
+    j := i + 1
+    while j < n && is_cont(byte_at(bs, j)) { j = j + 1 }
+    return j
+}
+
+func line_start(bs, i) {
+    j := i
+    while j > 0 && byte_at(bs, j - 1) != 10 { j = j - 1 }
+    return j
+}
+
+func line_end(bs, i, n) {
+    j := i
+    while j < n && byte_at(bs, j) != 10 { j = j + 1 }
+    return j
+}
+
+// keep an offset on a code-point boundary
+func snap(bs, i, n) {
+    j := i
+    if j > n { j = n }
+    if j < 0 { j = 0 }
+    while j > 0 && j < n && is_cont(byte_at(bs, j)) { j = j - 1 }
+    return j
+}
+
+// Apply this frame's typing and editing keys to (v, caret). multiline
+// enables Return/Up/Down/Tab; a single-line paste turns newlines into spaces.
+func edit_text(v, caret, multiline) {
+    t := mdk_typed()
+    if ctrl() && key(K_V) {
+        t = mdk_clipboard()
+        if !multiline { t = replace(replace(t, "\r", ""), "\n", " ") } else { t = replace(t, "\r", "") }
+    }
+    if multiline && key(K_RETURN) { t = t + "\n" }
+    if multiline && key(K_TAB) { t = t + "    " }
+    if t != "" {
+        v = substr(v, 0, caret) + t + substr(v, caret, len(v))
+        caret = caret + len(t)
+    }
+    bs := bytes(v)
+    n := len(v)
+    if key(K_BACKSPACE) && caret > 0 {
+        p := prev_cp(bs, caret)
+        if ctrl() {
+            p = caret
+            while p > 0 && byte_at(bs, p - 1) == 32 { p = p - 1 }
+            while p > 0 && byte_at(bs, p - 1) != 32 && byte_at(bs, p - 1) != 10 { p = p - 1 }
+        }
+        v = substr(v, 0, p) + substr(v, caret, n)
+        caret = p
+        bs = bytes(v)
+        n = len(v)
+    }
+    if key(K_DELETE) && caret < n {
+        q := next_cp(bs, caret, n)
+        v = substr(v, 0, caret) + substr(v, q, n)
+        bs = bytes(v)
+        n = len(v)
+    }
+    if key(K_LEFT) { caret = prev_cp(bs, caret) }
+    if key(K_RIGHT) { caret = next_cp(bs, caret, n) }
+    if key(K_HOME) {
+        if multiline && !ctrl() { caret = line_start(bs, caret) } else { caret = 0 }
+    }
+    if key(K_END) {
+        if multiline && !ctrl() { caret = line_end(bs, caret, n) } else { caret = n }
+    }
+    if multiline && (key(K_UP) || key(K_DOWN)) {
+        ls := line_start(bs, caret)
+        col_ := caret - ls
+        if key(K_UP) && ls > 0 {
+            pls := line_start(bs, ls - 1)
+            caret = snap(bs, pls + col_, ls - 1)
+            if pls + col_ > ls - 1 { caret = ls - 1 }
+        }
+        if key(K_DOWN) {
+            le := line_end(bs, caret, n)
+            if le < n {
+                nle := line_end(bs, le + 1, n)
+                caret = le + 1 + col_
+                if caret > nle { caret = nle }
+                caret = snap(bs, caret, n)
+            }
+        }
+    }
+    if ctrl() && key(K_A) { caret = n }
+    return v, caret
+}
+
+// byte offset in s closest to x px from its start (text at size, face)
+func offset_at_x(s, size, face, x) {
+    if x <= 0.0 { return 0 }
+    bs := bytes(s)
+    n := len(s)
+    i := 0
+    prev_w := 0.0
+    while i < n {
+        j := next_cp(bs, i, n)
+        w := mdk_text_w(mdk_str(substr(s, 0, j)), size, face)
+        if w >= x {
+            if x - prev_w < w - x { return i }
+            return j
+        }
+        prev_w = w
+        i = j
+    }
+    return n
+}
+
+func prefix_w(s, upto, size, face) {
+    if upto <= 0 { return 0.0 }
+    return mdk_text_w(mdk_str(substr(s, 0, upto)), size, face)
+}
+
+// last frame's rect of element i
+func prev_x(i) { return peek_f32(g_prev + i * E_STRIDE, E_X) }
+func prev_y(i) { return peek_f32(g_prev + i * E_STRIDE, E_Y) }
+func prev_w(i) { return peek_f32(g_prev + i * E_STRIDE, E_W) }
+func prev_h(i) { return peek_f32(g_prev + i * E_STRIDE, E_H) }
+func prev_content(i) { return peek_f32(g_prev + i * E_STRIDE, E_CONTENT) }
+func prev_scroll(i) { return peek_f32(g_prev + i * E_STRIDE, E_SCROLL) }
+
+// ---- scrolling ----
+// A vertical container that clips its children and scrolls with the wheel
+// while hovered. Offset lives in the state store under k. Close with end().
+func scroll_view(k) {
+    i := col()
+    clip()
+    sk := k + ":scroll"
+    sc := state_f(sk, 0.0)
+    if hovered(i) && mdk_wheel() != 0.0 { sc = sc - mdk_wheel() * 48.0 }
+    if i < g_prevn {
+        mx := prev_content(i) - prev_h(i)
+        if mx < 0.0 { mx = 0.0 }
+        if sc > mx { sc = mx }
+    }
+    if sc < 0.0 { sc = 0.0 }
+    set_f(sk, sc)
+    sf(i, E_SCROLL, sc)
+    return i
+}
+
+// ---- single-line text field ----
+// Returns the field's value (also kept in the state store under k).
+func text_field(k, placeholder) {
+    v := state_str(k, "")
+    ck := k + ":caret"
+    caret := state_int(ck, len(v))
+    if caret > len(v) { caret = len(v) }
+    sz := 14.0
+    i := row()
+    padxy(12.0, 9.0)
+    radius(8.0)
+    align(A_CENTER)
+    bg(C_INPUT)
+    clip()
+    if hovered(i) { mdk_cursor(1) }
+    if clicked(i) {
+        focus(k)
+        caret = offset_at_x(v, sz, 0, mdk_mouse_x() - prev_x(i) - 12.0)
+    }
+    f := focused(k)
+    if f {
+        border(1.5, C_ACCENT)
+        if mdk_mouse_released() != 0 && hovered(i) { g_claimed = 1 }
+        nv, nc := edit_text(v, caret, false)
+        v = nv
+        caret = nc
+        set_str(k, v)
+    } else {
+        border(1.0, C_BORDER)
+    }
+    set_int(ck, caret)
+    if v == "" && !f {
+        text(placeholder, sz)
+        fg(C_MUTED)
+    } else {
+        text(v, sz)
+    }
+    if f {
+        row()
+        size(1.5, mdk_line_h(sz, 0))
+        bg(C_ACCENT)
+        at(prefix_w(v, caret, sz, 0), 0.0)
+        end()
+    }
+    end()
+    return v
+}
+
+// ---- multi-line text area ----
+// Fills its container; lines don't wrap (long lines are clipped). The view
+// scrolls with the wheel and follows the caret.
+func text_area(k, placeholder) {
+    v := state_str(k, "")
+    ck := k + ":caret"
+    caret := state_int(ck, 0)
+    if caret > len(v) { caret = len(v) }
+    sz := 14.0
+    lh := mdk_line_h(sz, 0)
+    sv := scroll_view(k)
+    fill()
+    padxy(16.0, 14.0)
+    bg(C_INPUT)
+    radius(10.0)
+    if hovered(sv) { mdk_cursor(1) }
+    f := focused(k)
+    if clicked(sv) {
+        focus(k)
+        f = true
+        lines0 := split(v, "\n")
+        li := int(floor((mdk_mouse_y() - prev_y(sv) - 14.0 + prev_scroll(sv)) / lh))
+        if li < 0 { li = 0 }
+        if li >= len(lines0) { li = len(lines0) - 1 }
+        off := 0
+        j := 0
+        while j < li { off = off + len(lines0[j]) + 1  j = j + 1 }
+        caret = off + offset_at_x(lines0[li], sz, 0, mdk_mouse_x() - prev_x(sv) - 16.0)
+    }
+    moved := false
+    if f {
+        if mdk_mouse_released() != 0 && hovered(sv) { g_claimed = 1 }
+        before := caret
+        nv, nc := edit_text(v, caret, true)
+        moved = nc != before || nv != v
+        v = nv
+        caret = nc
+        set_str(k, v)
+        border(1.5, C_ACCENT)
+    } else {
+        border(1.0, C_BORDER)
+    }
+    set_int(ck, caret)
+    lines := split(v, "\n")
+    // caret line / column
+    cl := 0
+    off := 0
+    while cl < len(lines) - 1 && off + len(lines[cl]) < caret {
+        off = off + len(lines[cl]) + 1
+        cl = cl + 1
+    }
+    if moved && sv < g_prevn {
+        cy := float(cl) * lh
+        sk := k + ":scroll"
+        sc := state_f(sk, 0.0)
+        view_h := prev_h(sv) - 28.0
+        if cy < sc { sc = cy }
+        if cy + lh > sc + view_h { sc = cy + lh - view_h }
+        set_f(sk, sc)
+        sf(sv, E_SCROLL, sc)
+    }
+    if v == "" && !f {
+        text(placeholder, sz)
+        fg(C_MUTED)
+    }
+    j := 0
+    while j < len(lines) && !(v == "" && !f) {
+        text(lines[j], sz)
+        j = j + 1
+    }
+    if f {
+        row()
+        size(1.5, lh)
+        bg(C_ACCENT)
+        at(prefix_w(lines[cl], caret - off, sz, 0), float(cl) * lh)
+        end()
+    }
+    end()
+    return v
+}

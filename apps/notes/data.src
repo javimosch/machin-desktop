@@ -1,0 +1,174 @@
+// data.src — notes are plain markdown files, one per note:
+//   $MDK_NOTES_DIR (default ~/.local/share/mdk-notes)/notes/<created-ms>.md
+// plus profile.txt (nickname=…, accent=…). Nothing else: the folder is the
+// database, so notes stay readable, greppable and syncable without the app.
+// Titles and word counts are cached in the host state store (keys t:<id>,
+// w:<id>) and refreshed on save, so listing never re-reads every file.
+
+func data_dir() {
+    d := env("MDK_NOTES_DIR")
+    if d != "" { return d }
+    return env("HOME") + "/.local/share/mdk-notes"
+}
+
+func notes_dir() { return data_dir() + "/notes" }
+
+func note_path(id) { return notes_dir() + "/" + id + ".md" }
+
+func ensure_dirs() {
+    if env("MDK_NOTES_DIR") == "" {
+        mkdir(env("HOME") + "/.local")
+        mkdir(env("HOME") + "/.local/share")
+    }
+    mkdir(data_dir())
+    mkdir(notes_dir())
+}
+
+func ends(s, suf) { return len(s) >= len(suf) && substr(s, len(s) - len(suf), len(s)) == suf }
+
+// note ids, newest first (ids are creation times in ms, so names sort by age)
+func note_ids() {
+    names := list_dir(notes_dir())
+    ids := []string{}
+    k := 0
+    while k < len(names) {
+        n := names[k]
+        if ends(n, ".md") { ids = append(ids, substr(n, 0, len(n) - 3)) }
+        k = k + 1
+    }
+    asc := sort(ids)
+    out := []string{}
+    k = len(asc) - 1
+    while k >= 0 { out = append(out, asc[k])  k = k - 1 }
+    return out
+}
+
+func title_of(src) {
+    lines := split(src, "\n")
+    k := 0
+    while k < len(lines) {
+        t := trim(lines[k])
+        if t != "" {
+            while starts(t, "#") { t = substr(t, 1, len(t)) }
+            t = trim(t)
+            if t == "" { return "Untitled" }
+            return t
+        }
+        k = k + 1
+    }
+    return "Untitled"
+}
+
+// the body after the title line, flattened for previews
+func snippet_of(src, n) {
+    lines := split(src, "\n")
+    out := ""
+    seen_title := false
+    k := 0
+    while k < len(lines) && len(out) < n {
+        t := trim(lines[k])
+        if t != "" {
+            if !seen_title {
+                seen_title = true
+            } else if !starts(t, "```") {
+                while starts(t, "#") || starts(t, "-") || starts(t, ">") || starts(t, "*") { t = trim(substr(t, 1, len(t))) }
+                if starts(t, "[ ] ") || starts(t, "[x] ") { t = substr(t, 4, len(t)) }
+                t = replace(replace(t, "**", ""), "`", "")
+                if out != "" { out = out + " " }
+                out = out + t
+            }
+        }
+        k = k + 1
+    }
+    if len(out) > n { out = substr(out, 0, n) + "…" }
+    return out
+}
+
+func word_count(src) {
+    w := 0
+    in_word := false
+    bs := bytes(src)
+    k := 0
+    while k < len(src) {
+        b := byte_at(bs, k)
+        sp := b == 32 || b == 10 || b == 9 || b == 13
+        if !sp && !in_word { w = w + 1 }
+        in_word = !sp
+        k = k + 1
+    }
+    return w
+}
+
+// cached title / word count, filled from disk on first use
+func cache_note(id, src) {
+    set_str("t:" + id, title_of(src))
+    set_int("w:" + id, word_count(src))
+    set_str("s:" + id, snippet_of(src, 140))
+}
+
+func note_title(id) {
+    t := state_str("t:" + id, "")
+    if t == "" {
+        cache_note(id, read_file(note_path(id)))
+        t = state_str("t:" + id, "Untitled")
+    }
+    return t
+}
+
+func note_words(id) {
+    note_title(id)
+    return state_int("w:" + id, 0)
+}
+
+func note_snippet(id) {
+    note_title(id)
+    return state_str("s:" + id, "")
+}
+
+func save_note(id, src) {
+    write_file(note_path(id), src)
+    cache_note(id, src)
+    set_int("m:" + id, now())
+}
+
+func new_note() {
+    id := str(now_ms())
+    src := "# "
+    save_note(id, src)
+    return id
+}
+
+func delete_note(id) { remove(note_path(id)) }
+
+// edited time this session, else creation time from the id
+func note_time(id) {
+    m := state_int("m:" + id, 0)
+    if m > 0 { return m }
+    return int(parse_float(id) / 1000.0)
+}
+
+func ago(ts) {
+    d := now() - ts
+    if d < 45 { return "just now" }
+    if d < 3600 { return str(d / 60 + 1) + " min ago" }
+    if d < 86400 { return str(d / 3600) + " h ago" }
+    if d < 86400 * 7 { return str(d / 86400) + " d ago" }
+    return time_format(ts, "%b %d")
+}
+
+// ---- profile ----
+func load_profile() {
+    src := read_file(data_dir() + "/profile.txt")
+    lines := split(src, "\n")
+    k := 0
+    while k < len(lines) {
+        l := lines[k]
+        if starts(l, "nickname=") { set_str("nick", substr(l, 9, len(l))) }
+        if starts(l, "accent=") { set_int("accent", int(parse_float(substr(l, 7, len(l))))) }
+        k = k + 1
+    }
+}
+
+func save_profile() {
+    write_file(data_dir() + "/profile.txt", "nickname=" + state_str("nick", "") + "\naccent=" + str(state_int("accent", 0)) + "\n")
+}

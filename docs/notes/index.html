@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes — the dogfood app · mdk</title>
+  <meta name="description" content="A micro-SaaS-style markdown notes dashboard built with mdk: nickname, stats, editor + live preview, autosave to .md files.">
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="stylesheet" href="../assets/site.css">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="llms.txt">
+  <meta property="og:title" content="Notes — the dogfood app">
+  <meta property="og:description" content="A micro-SaaS-style markdown notes dashboard built with mdk: nickname, stats, editor + live preview, autosave to .md files.">
+  <meta property="og:image" content="https://javimosch.github.io/machin-desktop/assets/scenes.png">
+</head>
+<body>
+  <nav class="nav">
+    <div class="in">
+      <a class="brand" href="../"><img src="../assets/logo.png" alt="">mdk</a>
+      <div class="links">
+        <a href="../guide/">Guide</a>
+        <a href="../layout/">Layout</a>
+        <a href="../hot-reload/">Hot reload</a>
+        <a href="../benchmarks/">Benchmarks</a>
+        <a href="../api/">API</a>
+        <a href="../internals/">Internals</a>
+        <a href="../notes/" class="on">Notes app</a>
+        <a href="../agents/">Agents</a>
+      </div>
+      <a class="gh" href="https://github.com/javimosch/machin-desktop">GitHub ↗</a>
+    </div>
+  </nav>
+  <main>
+    <div class="doc">
+      <div class="eyebrow">Built with mdk · dogfood</div>
+      <h1>Notes — a markdown workspace in ~650 lines of MFL</h1>
+      <p class="lead">A micro-SaaS-style dashboard for personal markdown notes: a greeting with your nickname, stats, recent notes, a searchable list, an editor with a live preview, and settings. Every note is a plain <code>.md</code> file on your disk.</p>
+      <pre><code>./mdk dev apps/notes          # hack on it with hot reload
+./mdk build apps/notes -o notes && ./notes   # 2.6 MB binary</code></pre>
+    </div>
+
+    <img class="shot" src="../assets/notes-home.png" alt="Notes home dashboard: greeting with nickname, notes/words/latest stat cards, recent note cards">
+
+    <div class="doc">
+      <h2>What it does</h2>
+      <div class="cards">
+        <div class="card"><h3>Dashboard home</h3><p>“Good morning, &lt;nickname&gt;” — note and word counts, the latest edit, and cards for the six most recent notes.</p></div>
+        <div class="card"><h3>Editor + live preview</h3><p>Edit, Split or Preview modes. Headings, bullets, tasks, quotes, code fences and rules render as you type.</p></div>
+        <div class="card"><h3>Autosave to .md</h3><p>Every edit writes the note's file. The folder is the database — readable, greppable, syncable without the app.</p></div>
+        <div class="card"><h3>Search</h3><p>Filters titles and contents as you type.</p></div>
+        <div class="card"><h3>Profile</h3><p>Nickname with a generated avatar, and an accent color that themes the whole app.</p></div>
+        <div class="card"><h3>Shortcuts</h3><p><code>ctrl+n</code> new note · <code>ctrl+v</code> paste · <code>ctrl+Backspace</code> delete word · Esc leaves a field.</p></div>
+      </div>
+    </div>
+
+    <img class="shot" src="../assets/notes-editor.png" alt="Notes editor: list on the left, markdown source in the middle, rendered preview on the right">
+    <p class="muted">Typed through real SDL text-input events (UTF-8 included), autosaved, previewed live — the list title and word count follow.</p>
+
+    <div class="doc">
+      <h2>Where your notes live</h2>
+      <pre><code>~/.local/share/mdk-notes/         # or $MDK_NOTES_DIR
+├── profile.txt                   # nickname=…  accent=…
+└── notes/
+    ├── 1794566957208.md          # one file per note; the name is its creation time (ms)
+    └── 1794567010748.md</code></pre>
+      <p>The title is the note's first line (leading <code>#</code>s stripped). Titles, word counts and snippets are cached in the host state store and refreshed on save, so the list never re-reads every file.</p>
+
+      <h2>How it's built</h2>
+      <table>
+        <tr><th>file</th><th>what</th></tr>
+        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/app.src"><code>apps/notes/app.src</code></a></td><td>the UI: sidebar, home, notes (list + editor + preview), settings</td></tr>
+        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/data.src"><code>apps/notes/data.src</code></a></td><td>storage: list / read / write <code>.md</code> files, titles, snippets, word counts, profile</td></tr>
+        <tr><td><code>apps/notes/app.conf</code></td><td><code>title=Notes</code> · <code>size=1180x760</code></td></tr>
+      </table>
+      <p>It uses only the public framework: <code>scroll_view</code>, <code>text_field</code>, <code>text_area</code>, <code>md_view</code>, <code>card</code>, <code>nav_item</code>, <code>list_item</code>, <code>avatar</code>, <code>badge</code>, <code>button</code> — see the <a href="../api/">API</a>.</p>
+
+      <h2>What dogfooding found</h2>
+      <p>Building a real app is the point: it surfaced what the benchmarks never would.</p>
+      <ul>
+        <li><b>Text input, focus, clipping, scroll views, overlays</b> — none existed; the app needed all of them (milestone 2.5, done here).</li>
+        <li><b>A use-after-free in the state store</b>: <code>set_str(k, state_str(k))</code> freed the slot before copying it, writing 6 bytes of garbage into a note. State strings are now per-frame copies and <code>set_str</code> copies first.</li>
+        <li><b>Flex semantics</b>: <code>grow()</code> kept content size as its basis, so equal cards came out unequal; it is now a zero basis (CSS <code>flex: 1</code>), and growing children in a row are measured against the width they will actually get, so wrapped text fits.</li>
+      </ul>
+
+      <img class="shot" src="../assets/notes-settings.png" alt="Notes settings: nickname field with avatar, accent color swatches, storage path">
+
+      <h2>Next</h2>
+      <ul>
+        <li><b>Import from Notion</b> — Notion's “Markdown &amp; CSV” export is a zip of <code>.md</code> files: unpack, map each page to a note, keep sub-pages as links.</li>
+        <li>Text selection, soft-wrapped editing, inline <b>bold</b> / <code>code</code> / links in the preview.</li>
+        <li>Tags and pinning, from front-matter in the <code>.md</code> files.</li>
+      </ul>
+    </div>
+
+    <div class="agentbox">For agents: <a href="llms.txt">this page as llms.txt</a><a href="../llms.txt">site index llms.txt</a><a href="https://github.com/javimosch/machin-desktop/blob/master/SKILL.md">SKILL.md</a></div>
+  </main>
+  <footer>
+    <div class="in">
+      <span>mdk · machin desktop kit · MIT</span>
+      <a href="https://github.com/javimosch/machin-desktop">source</a>
+      <a href="https://github.com/javimosch/machin">machin</a>
+      <a href="https://github.com/javimosch/machin-desktop/issues">issues</a>
+    </div>
+  </footer>
+</body>
+</html>
