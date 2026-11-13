@@ -107,6 +107,14 @@ func nt_refresh() {
 
 // ---- JSON helpers ----
 
+// Notion error bodies are {"object":"error","code":…,"message":…} — surface
+// the message so a 400 says WHY, not just the status.
+func nt_err(resp, st) {
+    m, _ := json_get(resp, ".message")
+    if m == "" || m == "null" { return "HTTP " + str(st) + ": " + substr(resp, 0, 120) }
+    return "HTTP " + str(st) + ": " + jstr(m)
+}
+
 // count elements of a raw JSON array by probing indices
 func json_array_len(arr) {
     n := 0
@@ -426,13 +434,15 @@ func notion_sync_run() {
     has_more := true
     first := true
     for has_more {
-        body := "{\"filter\":{\"property\":\"object\",\"value\":\"page\"},\"sort\":{\"direction\":\"descending\",\"timestamp\":\"last_edited_time\"},\"page_size\":100}"
+        body := "{\"filter\":{\"property\":\"object\",\"value\":\"page\"},\"sort\":{\"direction\":\"descending\",\"timestamp\":\"last_edited_time\"},\"page_size\":100"
         if !first { body = body + ",\"start_cursor\":\"" + cursor + "\"" }
         body = body + "}"
         first = false
         st, resp, err := nt_api("POST", "/search", body, 0)
         if st != 200 || err != "" {
-            nt_send(4, done, "search failed (" + str(st) + ")")
+            msg := "search failed"
+            if err != "" { msg = msg + ": " + err } else { msg = msg + ": " + nt_err(resp, st) }
+            nt_send(4, done, msg)
             return
         }
         results, _ := json_get(resp, ".results")

@@ -88,7 +88,14 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
-        self.rfile.read(n)
+        raw = self.rfile.read(n)
+        # validate like Notion does — a malformed body is a 400 validation_error
+        try:
+            json.loads(raw)
+        except Exception:
+            self._j({"object": "error", "status": 400, "code": "validation_error",
+                     "message": "body failed validation: JSON could not be parsed"}, 400)
+            return
         if self.path == "/v1/search":
             self._j({"object": "list", "results": PAGES, "has_more": False, "next_cursor": None})
         else:
