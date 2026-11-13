@@ -3,7 +3,7 @@
       <h1>Internals</h1>
       <p class="lead">Two halves joined by a plain C ABI: an MFL framework that builds and lays out the tree, and a C host that owns the window, the GPU, the text and everything that must outlive a reload.</p>
 
-      <pre><code> your app (.src, MFL)          framework/ui.src (MFL)              host/host.c (C)
+      <pre><code> your app (.src, MFL)        framework/*.src (MFL)            host/host.c (C)
  ┌──────────────────┐   view   ┌───────────────────────┐  rects,  ┌──────────────────────┐
  │ func view() {    │ ───────▶ │ element tree (raw mem)│  glyphs  │ SDL3 window · GL 3.3 │
  │   col() text()   │          │ flexbox measure/place │ ───────▶ │ 1 instanced draw     │

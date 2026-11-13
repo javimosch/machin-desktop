@@ -155,7 +155,7 @@ DISPLAY=:0 python3 bench/run.py --mygo /tmp/bench-mygo --mdk build/bench-release
 ## How it works
 
 ```
- your app (.src, MFL)          framework/ui.src (MFL)              host/host.c (C)
+ your app (.src, MFL)        framework/*.src (MFL)            host/host.c (C)
  ┌──────────────────┐   view   ┌───────────────────────┐  rects,  ┌──────────────────────┐
  │ func view() {    │ ───────▶ │ element tree (raw mem)│  glyphs  │ SDL3 window · GL 3.3 │
  │   col() text()   │          │ flexbox measure/place │ ───────▶ │ 1 instanced draw     │
@@ -167,7 +167,7 @@ DISPLAY=:0 python3 bench/run.py --mygo /tmp/bench-mygo --mdk build/bench-release
 
 | Layer | What it does |
 |---|---|
-| [`framework/ui.src`](framework/ui.src) · MFL | GPUI-style core. The view opens/closes elements and styles the last one; `ui_end()` measures (sizes up, width constraints down — so paragraphs wrap), places (direction, gap, padding, grow/fill, align, justify, scroll) and paints in creation order, culling what's off-window. Input is immediate: `button()` is `true` on the frame it's clicked, hit-tested against last frame's layout. |
+| [`framework/ui.src`](framework/ui.src) + [`layout.src`](framework/layout.src) · MFL | GPUI-style core. The view opens/closes elements and styles the last one; `ui_end()` measures (sizes up, width constraints down — so paragraphs wrap), places (direction, gap, padding, grow/fill, align, justify, scroll) and paints in creation order, culling what's off-window. Input is immediate: `button()` is `true` on the frame it's clicked, hit-tested against last frame's layout. |
 | [`host/host.c`](host/host.c) · C | SDL3 window + OpenGL 3.3. Every rounded rect, border, shadow and glyph is one instance in one buffer, drawn with **one** `glDrawArraysInstanced` through an SDF fragment shader. Text: HarfBuzz shaping cached per (string, size, face), FreeType glyphs in a 1024² atlas uploaded by dirty rows. Owns the state store and the element buffers. Release builds sleep until an event: zero wake-ups at rest. |
 | [`mdk`](mdk) · bash | `dev`: compile the app to a `.so`, run the host, rebuild on save, write errors for the overlay. `build`: link the app's C straight into the host. `shot`: render N frames to a PPM. |
 

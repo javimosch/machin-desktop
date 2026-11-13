@@ -91,7 +91,7 @@ https://javimosch.github.io/machin-desktop/api/llms.txt
 
 | file | what | after editing |
 |---|---|---|
-| `framework/ui.src` | MFL core: element records (raw memory, `peek`/`poke`), `measure(i, maxw)`, `place`, `paint`, widgets | `./mdk check examples/counter`, then screenshot `examples/counter` and all four `MDK_SCENE`s of `examples/bench` |
+| `framework/ui.src` + `framework/layout.src` | MFL core: element records (raw memory, `peek`/`poke`), `measure(i, maxw)`, `place`, `paint`, widgets | `./mdk check examples/counter`, then screenshot `examples/counter` and all four `MDK_SCENE`s of `examples/bench` |
 | `framework/guide.json` | API source of truth (`mdk guide`, API page, llms.txt) | `python3 docs/build.py` |
 | `host/host.c` | SDL3/GL window, one-call SDF renderer, HarfBuzz shaping cache, atlas, state store, reload, test hooks | `mdk dev`/`shot` rebuild it automatically; release: `./mdk build` |
 | `docs/_src/*.html` + `*.llms.txt` | site pages | `python3 docs/build.py` (it also checks relative links) |
