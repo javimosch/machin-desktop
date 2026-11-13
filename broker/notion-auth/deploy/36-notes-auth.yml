@@ -1,0 +1,17 @@
+http:
+  routers:
+    notes-auth:
+      rule: "Host(`notes-auth.intrane.fr`)"
+      service: notes-auth
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: notes-auth.intrane.fr
+
+  services:
+    notes-auth:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8840"
