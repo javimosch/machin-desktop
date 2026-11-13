@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="554" viewBox="0 0 860 554" font-family="Ubuntu, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="860" height="554" rx="16" fill="#16161A"/>
+<text x="28" y="40" fill="#EDEDF2" font-size="20" font-weight="700">mdk vs MyGo — MyGo's own scenes, same machine</text>
+<rect x="630" y="24" width="14" height="14" rx="3" fill="#7C66DC"/><text x="650" y="36" fill="#EDEDF2" font-size="13">mdk</text>
+<rect x="710" y="24" width="14" height="14" rx="3" fill="#5A5A66"/><text x="730" y="36" fill="#EDEDF2" font-size="13">MyGo</text>
+<text x="28" y="94" fill="#EDEDF2" font-size="14" font-weight="700">list — CPU per frame</text>
+<text x="28" y="114" fill="#9A9AA8" font-size="12">lower is better</text>
+<rect x="250" y="78" width="88.7" height="20" rx="5" fill="#7C66DC"/>
+<text x="346.7" y="93" fill="#EDEDF2" font-size="12">0.48 ms</text>
+<rect x="250" y="104" width="520.0" height="20" rx="5" fill="#5A5A66"/>
+<text x="778.0" y="119" fill="#EDEDF2" font-size="12">2.83 ms</text>
+<text x="28" y="168" fill="#EDEDF2" font-size="14" font-weight="700">grid — CPU per frame</text>
+<text x="28" y="188" fill="#9A9AA8" font-size="12">lower is better</text>
+<rect x="250" y="152" width="53.9" height="20" rx="5" fill="#7C66DC"/>
+<text x="311.9" y="167" fill="#EDEDF2" font-size="12">3.90 ms</text>
+<rect x="250" y="178" width="520.0" height="20" rx="5" fill="#5A5A66"/>
+<text x="778.0" y="193" fill="#EDEDF2" font-size="12">37.62 ms</text>
+<text x="28" y="242" fill="#EDEDF2" font-size="14" font-weight="700">document — CPU per frame</text>
+<text x="28" y="262" fill="#9A9AA8" font-size="12">lower is better</text>
+<rect x="250" y="226" width="7.5" height="20" rx="5" fill="#7C66DC"/>
+<text x="265.5" y="241" fill="#EDEDF2" font-size="12">0.52 ms</text>
+<rect x="250" y="252" width="520.0" height="20" rx="5" fill="#5A5A66"/>
+<text x="778.0" y="267" fill="#EDEDF2" font-size="12">35.85 ms</text>
+<text x="28" y="316" fill="#EDEDF2" font-size="14" font-weight="700">grid — frames per second</text>
+<text x="28" y="336" fill="#9A9AA8" font-size="12">higher is better</text>
+<rect x="250" y="300" width="520.0" height="20" rx="5" fill="#7C66DC"/>
+<text x="778.0" y="315" fill="#EDEDF2" font-size="12">60.0 fps</text>
+<rect x="250" y="326" width="163.3" height="20" rx="5" fill="#5A5A66"/>
+<text x="421.3" y="341" fill="#EDEDF2" font-size="12">18.8 fps</text>
+<text x="28" y="390" fill="#EDEDF2" font-size="14" font-weight="700">document — frames per second</text>
+<text x="28" y="410" fill="#9A9AA8" font-size="12">higher is better</text>
+<rect x="250" y="374" width="520.0" height="20" rx="5" fill="#7C66DC"/>
+<text x="778.0" y="389" fill="#EDEDF2" font-size="12">60.0 fps</text>
+<rect x="250" y="400" width="181.8" height="20" rx="5" fill="#5A5A66"/>
+<text x="439.8" y="415" fill="#EDEDF2" font-size="12">21.0 fps</text>
+<text x="28" y="464" fill="#EDEDF2" font-size="14" font-weight="700">idle memory</text>
+<text x="28" y="484" fill="#9A9AA8" font-size="12">lower is better</text>
+<rect x="250" y="448" width="342.8" height="20" rx="5" fill="#7C66DC"/>
+<text x="600.8" y="463" fill="#EDEDF2" font-size="12">76.5 MB</text>
+<rect x="250" y="474" width="520.0" height="20" rx="5" fill="#5A5A66"/>
+<text x="778.0" y="489" fill="#EDEDF2" font-size="12">116.1 MB</text>
+<text x="28" y="538" fill="#9A9AA8" font-size="11">11th Gen Intel(R) Core(TM) i5-11320H @ 3.20GHz · Mesa/X11 · 60 Hz · 3 rounds, medians · both on the GPU · bench/results-linux.json</text>
+</svg>
