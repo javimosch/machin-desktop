@@ -73,11 +73,18 @@ host_dev() {
     echo "$out"
 }
 
-# Machin emits OpenSSL calls (-lssl -lcrypto) when the app uses https_*/wss_*
-# or the crypto builtins; `machin build` detects that itself, but mdk links the
-# C directly, so detect it the same way: any openssl include in the emitted C.
-extra_libs() { # emitted.c -> "-lssl -lcrypto" or ""
-    if grep -q 'openssl/' "$1"; then echo "-lssl -lcrypto"; fi
+# `machin build` detects needed libs from markers in the emitted C
+# (build.go: mfl_tls_dial→ssl/crypto, mfl_sqlite_→sqlite3, mfl_crypto_→crypto,
+# mfl_xeddsa_→sodium, mfl_zlib_→z); mdk links the C directly, so mirror that
+# detection here or dlopen fails on undefined symbols (e.g. sqlite3_*).
+extra_libs() { # emitted.c -> extra -l flags
+    local libs=""
+    if grep -q 'openssl/' "$1" || grep -q 'mfl_tls_dial' "$1"; then libs="$libs -lssl -lcrypto"; fi
+    if grep -q 'mfl_sqlite_' "$1"; then libs="$libs -lsqlite3"; fi
+    if grep -q 'mfl_crypto_' "$1"; then libs="$libs -lcrypto"; fi
+    if grep -q 'mfl_xeddsa_' "$1"; then libs="$libs -lsodium -lcrypto"; fi
+    if grep -q 'mfl_zlib_' "$1"; then libs="$libs -lz"; fi
+    echo "$libs"
 }
 
 build_so() { # appdir -> writes $BUILD/<app>.so atomically, or <app>.so.err
