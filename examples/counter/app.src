@@ -1,0 +1,20 @@
+// counter — the machin-desktop hello world. Edit anything below while
+// `./mdk dev examples/counter` runs: the window redraws in place and the count
+// survives, because it lives in the host's state store, not in this module.
+
+func view() {
+    n := state_int("count", 0)
+    col()
+    fill()
+    center()
+    gap(16.0)
+        text(str(n), 56.0)
+        text("clicks so far", 14.0)
+        fg(C_MUTED)
+        row()
+        gap(10.0)
+            if button("Increment") { set_int("count", n + 1) }
+            if button_ghost("Reset") { set_int("count", 0) }
+        end()
+    end()
+}

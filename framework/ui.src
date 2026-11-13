@@ -1,0 +1,447 @@
+// mdk/ui.src — GPUI-style UI core for machin desktop apps.
+//
+// The app's view is a function of its state, run every frame: it opens and
+// closes elements (col/row/box/text/button), styles the last one with
+// modifiers, and reads input (button() returns true on the frame it is
+// clicked). ui_end() then lays the tree out (a small flexbox: direction, gap,
+// padding, grow/fill, align, justify) and paints it as rounded rects, borders,
+// shadows and shaped text — instances the host draws in one GPU call.
+//
+// The tree lives in host-owned raw memory (fixed 128-byte records, peek/poke),
+// not MFL slices: nothing is allocated per frame, and last frame's laid-out
+// rects — which hit-testing reads — survive hot reloads.
+
+extern "mdk" {
+    fn mdk_str(string) int
+    fn mdk_text_w(int, f32) f32
+    fn mdk_line_h(f32) f32
+    fn mdk_text(int, f32, f32, f32, int)
+    fn mdk_rect(f32, f32, f32, f32, int, f32, f32, int)
+    fn mdk_shadow(f32, f32, f32, f32, int, f32, f32)
+    fn mdk_clear(int)
+    fn mdk_win_w() f32
+    fn mdk_win_h() f32
+    fn mdk_mouse_x() f32
+    fn mdk_mouse_y() f32
+    fn mdk_press_x() f32
+    fn mdk_press_y() f32
+    fn mdk_mouse_down() int
+    fn mdk_mouse_released() int
+    fn mdk_wheel() f32
+    fn mdk_time() f64
+    fn mdk_animate()
+    fn mdk_el_buf() int
+    fn mdk_prev_buf() int
+    fn mdk_prev_n() int
+    fn mdk_el_cap() int
+    fn mdk_set_n(int)
+    fn mdk_get_int(string, int) int
+    fn mdk_set_int(string, int)
+    fn mdk_get_f(string, f64) f64
+    fn mdk_set_f(string, f64)
+    fn mdk_get_str(string, string) string
+    fn mdk_set_str(string, string)
+}
+
+// ---- record layout (byte offsets in a 128-byte element) ----
+var E_KIND = 0
+var E_PARENT = 4
+var E_FIRST = 8
+var E_LAST = 12
+var E_NEXT = 16
+var E_DIR = 20
+var E_FLAGS = 24
+var E_TXT = 28
+var E_X = 32
+var E_Y = 36
+var E_W = 40
+var E_H = 44
+var E_FW = 48
+var E_FH = 52
+var E_PL = 56
+var E_PT = 60
+var E_PR = 64
+var E_PB = 68
+var E_GAP = 72
+var E_BG = 76
+var E_RAD = 80
+var E_BW = 84
+var E_BC = 88
+var E_FG = 92
+var E_SIZE = 96
+var E_SHB = 100
+var E_SHC = 104
+var E_GROW = 112
+var E_ALIGN = 120
+var E_JUST = 124
+var E_STRIDE = 128
+
+// flags
+var F_FILLW = 1
+var F_FILLH = 2
+
+// align (cross axis) / justify (main axis)
+var A_START = 0
+var A_CENTER = 1
+var A_STRETCH = 2
+var A_END = 3
+var J_START = 0
+var J_CENTER = 1
+var J_END = 2
+var J_BETWEEN = 3
+
+// ---- theme (rgba) ----
+var C_BG = 0x16161AFF
+var C_SURFACE = 0x202027FF
+var C_TEXT = 0xEDEDF2FF
+var C_MUTED = 0x9A9AA8FF
+var C_ACCENT = 0x6E56CFFF
+var C_ACCENT_HI = 0x7C66DCFF
+var C_ACCENT_LO = 0x5B45B8FF
+var C_BORDER = 0x33333DFF
+
+// ---- frame state (ints only: no per-frame allocation) ----
+var g_buf = 0
+var g_prev = 0
+var g_prevn = 0
+var g_n = 0
+var g_last = -1
+var g_stack = 0
+var g_sp = 0
+
+func el(i) { return g_buf + i * E_STRIDE }
+func gi(i, off) { return peek_i32(g_buf + i * E_STRIDE, off) }
+func si(i, off, v) { poke_i32(g_buf + i * E_STRIDE, off, v) }
+func gf(i, off) { return peek_f32(g_buf + i * E_STRIDE, off) }
+func sf(i, off, v) { poke_f32(g_buf + i * E_STRIDE, off, v) }
+func gu(i, off) { return peek_u32(g_buf + i * E_STRIDE, off) }
+func su(i, off, v) { poke_u32(g_buf + i * E_STRIDE, off, v) }
+
+// new element: zeroed, linked under the open container
+func new_el(kind) {
+    i := g_n
+    if i >= mdk_el_cap() { return g_last }
+    g_n = g_n + 1
+    p := el(i)
+    k := 0
+    while k < E_STRIDE { poke_i64(p, k, 0)  k = k + 8 }
+    si(i, E_KIND, kind)
+    si(i, E_FIRST, -1)
+    si(i, E_LAST, -1)
+    si(i, E_NEXT, -1)
+    sf(i, E_FW, -1.0)
+    sf(i, E_FH, -1.0)
+    si(i, E_ALIGN, A_START)
+    su(i, E_FG, C_TEXT)
+    sf(i, E_SIZE, 15.0)
+    parent := -1
+    if g_sp > 0 { parent = peek_i32(g_stack, (g_sp - 1) * 4) }
+    si(i, E_PARENT, parent)
+    if parent >= 0 {
+        if gi(parent, E_FIRST) < 0 { si(parent, E_FIRST, i) } else { si(gi(parent, E_LAST), E_NEXT, i) }
+        si(parent, E_LAST, i)
+        su(i, E_FG, gu(parent, E_FG))
+        sf(i, E_SIZE, gf(parent, E_SIZE))
+    }
+    g_last = i
+    return i
+}
+
+func push(i) {
+    if g_sp < 1024 {
+        poke_i32(g_stack, g_sp * 4, i)
+        g_sp = g_sp + 1
+    }
+}
+
+// ---- building ----
+func ui_begin() {
+    if g_stack == 0 { g_stack = alloc(4096) }
+    g_buf = mdk_el_buf()
+    g_prev = mdk_prev_buf()
+    g_prevn = mdk_prev_n()
+    g_n = 0
+    g_sp = 0
+    g_last = -1
+    mdk_clear(C_BG)
+    r := new_el(0)
+    sf(r, E_FW, mdk_win_w())
+    sf(r, E_FH, mdk_win_h())
+    push(r)
+}
+
+func col() {
+    i := new_el(0)
+    si(i, E_DIR, 0)
+    push(i)
+    return i
+}
+
+func row() {
+    i := new_el(0)
+    si(i, E_DIR, 1)
+    push(i)
+    return i
+}
+
+// close the innermost open container; modifiers after end() target it
+func end() {
+    if g_sp > 1 {
+        g_sp = g_sp - 1
+        g_last = peek_i32(g_stack, g_sp * 4)
+    }
+}
+
+func text(s, size) {
+    i := new_el(1)
+    si(i, E_TXT, mdk_str(s))
+    sf(i, E_SIZE, size)
+    return i
+}
+
+func label(s) { return text(s, gf(g_last, E_SIZE)) }
+
+func spacer() {
+    i := new_el(0)
+    sf(i, E_GROW, 1.0)
+    return i
+}
+
+// ---- modifiers (apply to the last created / closed element) ----
+func fill() { si(g_last, E_FLAGS, gi(g_last, E_FLAGS) | F_FILLW | F_FILLH) }
+func fillw() { si(g_last, E_FLAGS, gi(g_last, E_FLAGS) | F_FILLW) }
+func fillh() { si(g_last, E_FLAGS, gi(g_last, E_FLAGS) | F_FILLH) }
+func width(v) { sf(g_last, E_FW, v) }
+func height(v) { sf(g_last, E_FH, v) }
+func size(w, h) { sf(g_last, E_FW, w)  sf(g_last, E_FH, h) }
+func pad(v) { padxy(v, v) }
+func padxy(x, y) {
+    sf(g_last, E_PL, x)  sf(g_last, E_PR, x)
+    sf(g_last, E_PT, y)  sf(g_last, E_PB, y)
+}
+func gap(v) { sf(g_last, E_GAP, v) }
+func grow(v) { sf(g_last, E_GROW, v) }
+func bg(c) { su(g_last, E_BG, c) }
+func fg(c) { su(g_last, E_FG, c) }
+func font(s) { sf(g_last, E_SIZE, s) }
+func radius(r) { sf(g_last, E_RAD, r) }
+func border(w, c) { sf(g_last, E_BW, w)  su(g_last, E_BC, c) }
+func shadow(blur, c) { sf(g_last, E_SHB, blur)  su(g_last, E_SHC, c) }
+func align(a) { si(g_last, E_ALIGN, a) }
+func justify(j) { si(g_last, E_JUST, j) }
+func center() { si(g_last, E_ALIGN, A_CENTER)  si(g_last, E_JUST, J_CENTER) }
+
+// ---- input against last frame's layout ----
+func prev_rect_has(i, x, y) {
+    if i < 0 || i >= g_prevn { return false }
+    p := g_prev + i * E_STRIDE
+    rx := peek_f32(p, E_X)
+    ry := peek_f32(p, E_Y)
+    return x >= rx && y >= ry && x < rx + peek_f32(p, E_W) && y < ry + peek_f32(p, E_H)
+}
+
+func hovered(i) { return prev_rect_has(i, mdk_mouse_x(), mdk_mouse_y()) }
+
+func pressed(i) { return mdk_mouse_down() != 0 && prev_rect_has(i, mdk_press_x(), mdk_press_y()) }
+
+func clicked(i) {
+    return mdk_mouse_released() != 0 && hovered(i) && prev_rect_has(i, mdk_press_x(), mdk_press_y())
+}
+
+// ---- widgets ----
+func button_styled(s, base, hi, lo) {
+    i := row()
+    padxy(18.0, 10.0)
+    radius(8.0)
+    center()
+    c := base
+    if hovered(i) { c = hi }
+    if pressed(i) { c = lo }
+    bg(c)
+    shadow(6.0, 0x00000040)
+    text(s, 15.0)
+    fg(0xFFFFFFFF)
+    end()
+    return clicked(i)
+}
+
+func button(s) { return button_styled(s, C_ACCENT, C_ACCENT_HI, C_ACCENT_LO) }
+
+func button_ghost(s) {
+    i := row()
+    padxy(16.0, 9.0)
+    radius(8.0)
+    center()
+    border(1.0, C_BORDER)
+    c := C_SURFACE
+    if hovered(i) { c = 0x2A2A33FF }
+    if pressed(i) { c = 0x1C1C22FF }
+    bg(c)
+    text(s, 15.0)
+    end()
+    return clicked(i)
+}
+
+// ---- layout ----
+func is_row(i) { return gi(i, E_DIR) == 1 }
+
+func measure(i) {
+    w := 0.0
+    h := 0.0
+    if gi(i, E_KIND) == 1 {
+        w = mdk_text_w(gi(i, E_TXT), gf(i, E_SIZE))
+        h = mdk_line_h(gf(i, E_SIZE))
+    } else {
+        main := 0.0
+        cross := 0.0
+        n := 0
+        c := gi(i, E_FIRST)
+        r := is_row(i)
+        while c >= 0 {
+            measure(c)
+            cw := gf(c, E_W)
+            ch := gf(c, E_H)
+            if r {
+                main = main + cw
+                if ch > cross { cross = ch }
+            } else {
+                main = main + ch
+                if cw > cross { cross = cw }
+            }
+            n = n + 1
+            c = gi(c, E_NEXT)
+        }
+        if n > 1 { main = main + gf(i, E_GAP) * float(n - 1) }
+        if r { w = main  h = cross } else { w = cross  h = main }
+        w = w + gf(i, E_PL) + gf(i, E_PR)
+        h = h + gf(i, E_PT) + gf(i, E_PB)
+    }
+    if gf(i, E_FW) >= 0.0 { w = gf(i, E_FW) }
+    if gf(i, E_FH) >= 0.0 { h = gf(i, E_FH) }
+    sf(i, E_W, w)
+    sf(i, E_H, h)
+}
+
+// main-axis grow factor of child c inside a container laid out along r
+func grow_of(c, r) {
+    g := gf(c, E_GROW)
+    f := gi(c, E_FLAGS)
+    if r && (f & F_FILLW) != 0 && g == 0.0 { g = 1.0 }
+    if !r && (f & F_FILLH) != 0 && g == 0.0 { g = 1.0 }
+    return g
+}
+
+func stretches(c, r, a) {
+    f := gi(c, E_FLAGS)
+    if a == A_STRETCH { return true }
+    if r { return (f & F_FILLH) != 0 }
+    return (f & F_FILLW) != 0
+}
+
+func place(i, x, y, w, h) {
+    sf(i, E_X, x)
+    sf(i, E_Y, y)
+    sf(i, E_W, w)
+    sf(i, E_H, h)
+    if gi(i, E_KIND) == 1 { return }
+    r := is_row(i)
+    ix := x + gf(i, E_PL)
+    iy := y + gf(i, E_PT)
+    iw := w - gf(i, E_PL) - gf(i, E_PR)
+    ih := h - gf(i, E_PT) - gf(i, E_PB)
+    imain := ih
+    icross := iw
+    if r { imain = iw  icross = ih }
+    used := 0.0
+    tgrow := 0.0
+    n := 0
+    c := gi(i, E_FIRST)
+    while c >= 0 {
+        if r { used = used + gf(c, E_W) } else { used = used + gf(c, E_H) }
+        tgrow = tgrow + grow_of(c, r)
+        n = n + 1
+        c = gi(c, E_NEXT)
+    }
+    g := gf(i, E_GAP)
+    if n > 1 { used = used + g * float(n - 1) }
+    free := imain - used
+    if free < 0.0 { free = 0.0 }
+    pos := 0.0
+    j := gi(i, E_JUST)
+    if tgrow == 0.0 {
+        if j == J_CENTER { pos = free / 2.0 }
+        if j == J_END { pos = free }
+        if j == J_BETWEEN && n > 1 { g = g + free / float(n - 1) }
+    }
+    a := gi(i, E_ALIGN)
+    c = gi(i, E_FIRST)
+    while c >= 0 {
+        cm := gf(c, E_H)
+        cc := gf(c, E_W)
+        if r { cm = gf(c, E_W)  cc = gf(c, E_H) }
+        gr := grow_of(c, r)
+        if tgrow > 0.0 && gr > 0.0 { cm = cm + free * gr / tgrow }
+        if stretches(c, r, a) { cc = icross }
+        off := 0.0
+        if a == A_CENTER { off = (icross - cc) / 2.0 }
+        if a == A_END { off = icross - cc }
+        if r {
+            place(c, ix + pos, iy + off, cm, cc)
+        } else {
+            place(c, ix + off, iy + pos, cc, cm)
+        }
+        pos = pos + cm + g
+        c = gi(c, E_NEXT)
+    }
+}
+
+// ---- paint: creation order is pre-order, so parents paint under children ----
+func paint() {
+    i := 0
+    while i < g_n {
+        x := gf(i, E_X)
+        y := gf(i, E_Y)
+        w := gf(i, E_W)
+        h := gf(i, E_H)
+        if gi(i, E_KIND) == 1 {
+            mdk_text(gi(i, E_TXT), x, y, gf(i, E_SIZE), gu(i, E_FG))
+        } else {
+            sb := gf(i, E_SHB)
+            if sb > 0.0 { mdk_shadow(x, y + sb * 0.35, w, h, gu(i, E_SHC), gf(i, E_RAD), sb) }
+            bgc := gu(i, E_BG)
+            bw := gf(i, E_BW)
+            if (bgc & 255) != 0 || bw > 0.0 {
+                mdk_rect(x, y, w, h, bgc, gf(i, E_RAD), bw, gu(i, E_BC))
+            }
+        }
+        i = i + 1
+    }
+}
+
+func ui_end() {
+    if g_n == 0 { return }
+    measure(0)
+    place(0, 0.0, 0.0, mdk_win_w(), mdk_win_h())
+    paint()
+    mdk_set_n(g_n)
+}
+
+// The host's entry point. Every frame runs inside an arena block, so the
+// app's temporaries (strings, slices) are freed when the frame returns —
+// without it, per-frame allocations accumulate for the life of the process.
+// Keep state in the host store (state_int/set_int, ...), not in MFL globals.
+export func mdk_frame() {
+    arena {
+        ui_begin()
+        view()
+        ui_end()
+    }
+}
+
+// ---- state that survives hot reloads (owned by the host) ----
+func state_int(k, d) { return mdk_get_int(k, d) }
+func set_int(k, v) { mdk_set_int(k, v) }
+func state_f(k, d) { return mdk_get_f(k, d) }
+func set_f(k, v) { mdk_set_f(k, v) }
+func state_str(k, d) { return mdk_get_str(k, d) }
+func set_str(k, v) { mdk_set_str(k, v) }

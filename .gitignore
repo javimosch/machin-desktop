@@ -1,0 +1,7 @@
+vendor/
+*.so
+*.o
+/build/
+*.mfl
+/examples/*/app
+/examples/*/*.c

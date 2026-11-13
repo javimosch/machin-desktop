@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# mdk — machin desktop kit CLI.
+#
+#   ./mdk dev <appdir>               run with hot reload (state kept across edits)
+#   ./mdk build <appdir> [-o out]    one release binary (app linked in, no reload)
+#   ./mdk shot <appdir> out.ppm      render a few frames and save a screenshot
+#
+# An app is a directory of .src files defining `func view()`. mdk prepends the
+# framework (framework/*.src) and compiles it with machin: dev builds a shared
+# object the host dlopens; release links the same C straight into the host.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+MACHIN="${MACHIN:-machin}"
+SDL_VER=3.4.20
+SDL_SRC="$ROOT/vendor/SDL3-$SDL_VER"
+SDL_LIB="$ROOT/vendor/sdl3-build/libSDL3.a"
+SDL_INC="-I$SDL_SRC/include"
+CFLAGS_MFL="-std=c11 -fno-strict-aliasing -fwrapv -w"
+FT_FLAGS="$(pkg-config --cflags freetype2 harfbuzz)"
+FT_LIBS="$(pkg-config --libs freetype2 harfbuzz)"
+SYS_LIBS="-lGL -lm -ldl -lpthread"
+BUILD="$ROOT/build"
+mkdir -p "$BUILD"
+
+die() { echo "mdk: $*" >&2; exit 1; }
+
+ensure_sdl() {
+    [[ -f "$SDL_LIB" ]] && return
+    echo "mdk: building vendored SDL3 $SDL_VER (static, video only)..." >&2
+    mkdir -p "$ROOT/vendor"
+    if [[ ! -d "$SDL_SRC" ]]; then
+        curl -fsSL "https://github.com/libsdl-org/SDL/releases/download/release-$SDL_VER/SDL3-$SDL_VER.tar.gz" \
+            | tar xz -C "$ROOT/vendor"
+    fi
+    nice -n19 cmake -S "$SDL_SRC" -B "$ROOT/vendor/sdl3-build" -DCMAKE_BUILD_TYPE=Release \
+        -DSDL_STATIC=ON -DSDL_SHARED=OFF -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_EXAMPLES=OFF \
+        -DSDL_AUDIO=OFF -DSDL_CAMERA=OFF -DSDL_HAPTIC=OFF -DSDL_JOYSTICK=OFF -DSDL_HIDAPI=OFF \
+        -DSDL_SENSOR=OFF -DSDL_POWER=OFF -DSDL_GPU=OFF -DSDL_VULKAN=OFF -DSDL_INSTALL=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON >/dev/null
+    nice -n19 cmake --build "$ROOT/vendor/sdl3-build" -j3 >/dev/null
+}
+
+app_srcs() { # appdir -> framework + app sources, in encode order
+    ls "$ROOT"/framework/*.src
+    ls "$1"/*.src
+}
+
+# Compile the app to C. Typechecking happens at encode time, so a bad edit
+# fails here with machin's own diagnostics.
+emit_c() { # appdir out.c
+    local mfl; mfl="$BUILD/$(basename "$1").mfl"
+    # shellcheck disable=SC2046
+    "$MACHIN" encode $(app_srcs "$1") > "$mfl" && "$MACHIN" build "$mfl" --emit-c > "$2"
+}
+
+host_dev() {
+    local out="$BUILD/mdk-host"
+    if [[ ! -x "$out" || "$ROOT/host/host.c" -nt "$out" ]]; then
+        ensure_sdl
+        # shellcheck disable=SC2086
+        cc -O2 -rdynamic $SDL_INC $FT_FLAGS "$ROOT/host/host.c" "$SDL_LIB" $FT_LIBS $SYS_LIBS -o "$out" >&2
+    fi
+    echo "$out"
+}
+
+build_so() { # appdir -> writes $BUILD/<app>.so atomically, or <app>.so.err
+    local name; name="$(basename "$1")"
+    local so="$BUILD/$name.so" c="$BUILD/$name.c" err="$BUILD/$name.so.err"
+    local t0; t0=$(date +%s%N)
+    # shellcheck disable=SC2086
+    if ! emit_c "$1" "$c" 2> "$err.tmp" || \
+       ! cc -shared -fPIC -O1 $CFLAGS_MFL "$c" -o "$so.tmp" -lm -lpthread 2>> "$err.tmp"; then
+        mv "$err.tmp" "$err"
+        echo "mdk: build failed:" >&2; cat "$err" >&2
+        return 1
+    fi
+    rm -f "$err" "$err.tmp"
+    mv "$so.tmp" "$so"
+    echo "mdk: built $name.so in $(( ($(date +%s%N) - t0) / 1000000 )) ms" >&2
+}
+
+fingerprint() { # appdir -> mtimes of every source mdk compiles
+    # shellcheck disable=SC2046
+    stat -c '%y' $(app_srcs "$1") 2>/dev/null | md5sum
+}
+
+cmd_dev() {
+    local dir="${1:?usage: mdk dev <appdir>}"; shift || true
+    [[ -d "$dir" ]] || die "no such app dir: $dir"
+    local host; host="$(host_dev)"
+    local name; name="$(basename "$dir")"
+    build_so "$dir" || true
+    [[ -f "$BUILD/$name.so" ]] || die "first build failed — fix the errors above"
+    "$host" "$BUILD/$name.so" --title "$name (dev)" "$@" &
+    MDK_HOST_PID=$!
+    local pid=$MDK_HOST_PID
+    trap 'kill "${MDK_HOST_PID:-}" 2>/dev/null || true' EXIT INT TERM
+    local fp; fp="$(fingerprint "$dir")"
+    echo "mdk: watching $dir — edit and save; Esc closes the window" >&2
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 0.25
+        local now; now="$(fingerprint "$dir")"
+        if [[ "$now" != "$fp" ]]; then
+            fp="$now"
+            build_so "$dir" || true
+        fi
+    done
+}
+
+cmd_build() {
+    local dir="${1:?usage: mdk build <appdir> [-o out]}"; shift
+    local out; out="$BUILD/$(basename "$dir")"
+    [[ "${1:-}" == "-o" ]] && out="$2"
+    ensure_sdl
+    local c; c="$BUILD/$(basename "$dir").release.c"
+    emit_c "$dir" "$c"
+    # shellcheck disable=SC2086
+    cc -O2 -DMDK_STATIC $SDL_INC $FT_FLAGS -c "$ROOT/host/host.c" -o "$BUILD/host.o"
+    # shellcheck disable=SC2086
+    cc -O2 $CFLAGS_MFL -c "$c" -o "$BUILD/app.o"
+    # shellcheck disable=SC2086
+    cc -s "$BUILD/host.o" "$BUILD/app.o" "$SDL_LIB" $FT_LIBS $SYS_LIBS -o "$out"
+    echo "mdk: built $out ($(du -h "$out" | cut -f1))" >&2
+}
+
+cmd_shot() {
+    local dir="${1:?usage: mdk shot <appdir> out.ppm}" out="${2:?out.ppm}"; shift 2
+    local host; host="$(host_dev)"
+    build_so "$dir"
+    "$host" "$BUILD/$(basename "$dir").so" --shot "$out" "$@"
+}
+
+case "${1:-}" in
+    dev) shift; cmd_dev "$@" ;;
+    build) shift; cmd_build "$@" ;;
+    shot) shift; cmd_shot "$@" ;;
+    *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
