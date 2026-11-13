@@ -10,6 +10,10 @@ func boot() {
     set_int("_booted", 1)
     ensure_dirs()
     load_profile()
+    notion_listen_boot()
+    notion_refresh_state()
+    if env("MDK_NOTES_SYNC") == "1" && notion_connected() { notion_sync_begin() }
+    if env("MDK_NOTES_CONNECT") == "1" && !notion_connected() { notion_begin() }
     if state_str("nick", "") == "" { set_str("nick", "Friend") }
     if len(note_ids()) == 0 { seed_welcome() }
 }
@@ -444,9 +448,10 @@ func page_settings() {
                 text(notes_dir(), 13.0)
                 fg(0xB8E0C8FF)
             end()
-            text(str(len(note_ids())) + " notes  ·  coming soon: import from Notion", 13.0)
+            text(str(len(note_ids())) + " notes", 13.0)
             fg(C_MUTED)
         end()
+        notion_settings_card()
     end()
 }
 
@@ -454,6 +459,9 @@ func page_settings() {
 func view() {
     boot()
     apply_theme()
+    notion_poll()
+    notion_sync_poll()
+    if state_int("nt:flow", 0) == 1 || state_int("nt:sync", 0) == 1 { animate() }
     if ctrl() && key(K_N) { create_and_open() }
     page := state_str("page", "home")
     row()

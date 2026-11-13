@@ -1,0 +1,488 @@
+// notion_sync.src — Notion import: shared-page search, recursive block
+// fetch, block→markdown conversion, one .md note per page. Runs entirely on
+// a background goroutine; the view only drains nt_prog_ch for progress.
+//
+//   page  ->  # Title + blocks + <!-- notion: id=… edited=… -->
+//   file  ->  notes/<created_ms>n<sha256(page_id)[:12]>.md   (deterministic:
+//             a re-sync rewrites the same file, never duplicates)
+//   index ->  notion-index.txt  lines "page_id|file_id|last_edited_time"
+//             unchanged pages (same last_edited_time) are skipped.
+//
+// Rate limit: nt_api sleeps 400 ms before every request (~2.5 req/s, under
+// Notion's ~3 req/s). API base is env-overridable (MDK_NOTION_API) so the
+// importer can be tested against a mock.
+
+type NTRich struct {
+    plain_text string
+    href string
+    annotations NTAnnot
+}
+
+type NTAnnot struct {
+    bold bool
+    italic bool
+    strikethrough bool
+    code bool
+}
+
+type NTPayload struct {
+    rich_text []NTRich
+    checked bool
+    language string
+    expression string
+    title string
+    url string
+    caption []NTRich
+    cells [][][]NTRich
+}
+
+type NTProp struct {
+    title []NTRich
+    rich_text []NTRich
+}
+
+type NTPageS struct {
+    id string
+    last_edited_time string
+    created_time string
+    url string
+    properties map[string]NTProp
+}
+
+type NTProg struct {
+    phase int
+    done int
+    total int
+    msg string
+}
+
+var nt_prog_ch = make(chan NTProg)
+
+func api_base() {
+    b := env("MDK_NOTION_API")
+    if b != "" { return b }
+    return "https://api.notion.com/v1"
+}
+
+func nt_send(phase, done, msg) {
+    nt_prog_ch <- NTProg{phase: phase, done: done, total: 0, msg: msg}
+}
+
+// jstr decodes a json_get string token ("to_do" -> to_do), handling escapes.
+func jstr(tok) { return parse(tok, "") }
+
+func nt_api(method, path, body, retry) {
+    sleep(400)
+    tok := notion_token()
+    if tok.access_token == "" { return -1, "", "no token" }
+    h := []string{"Authorization: Bearer " + tok.access_token, "Notion-Version: 2022-06-28"}
+    if body != "" { h = append(h, "Content-Type: application/json") }
+    st, resp, err := http_request(method, api_base() + path, h, body)
+    if st == 401 && retry == 0 {
+        if nt_refresh() == 1 {
+            s2, r2, e2 := nt_api(method, path, body, 1)
+            return s2, r2, e2
+        }
+    }
+    return st, resp, err
+}
+
+// access tokens are long-lived but rotatable; refresh goes through the broker
+// because the refresh grant also needs the client secret.
+func nt_refresh() {
+    tok := notion_token()
+    if tok.refresh_token == "" { return 0 }
+    body := "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"" + tok.refresh_token + "\"}"
+    h := []string{"Content-Type: application/json"}
+    st, resp, err := http_request("POST", broker_url() + "/notion/refresh", h, body)
+    if st != 200 || err != "" { return 0 }
+    nt := parse(resp, NTToken{})
+    if nt.access_token == "" { return 0 }
+    if nt.refresh_token == "" { nt.refresh_token = tok.refresh_token }
+    if nt.workspace_name == "" { nt.workspace_name = tok.workspace_name }
+    write_file(token_path(), json(nt))
+    _, _, _ := exec("chmod 600 '" + token_path() + "'")
+    return 1
+}
+
+// ---- JSON helpers ----
+
+// count elements of a raw JSON array by probing indices
+func json_array_len(arr) {
+    n := 0
+    for {
+        _, e := json_get(arr, "[" + str(n) + "]")
+        if e != "" { break }
+        n = n + 1
+        if n > 10000 { break }
+    }
+    return n
+}
+
+// ---- inline markdown ----
+
+func rich_md(rs) {
+    out := ""
+    i := 0
+    for i < len(rs) {
+        r := rs[i]
+        t := r.plain_text
+        if r.href != "" { t = "[" + t + "](" + r.href + ")" }
+        a := r.annotations
+        if a.code {
+            t = "`" + t + "`"
+        } else {
+            if a.bold { t = "**" + t + "**" }
+            if a.italic { t = "*" + t + "*" }
+            if a.strikethrough { t = "~~" + t + "~~" }
+        }
+        out = out + t
+        i = i + 1
+    }
+    return out
+}
+
+func plain_text(rs) {
+    out := ""
+    i := 0
+    for i < len(rs) { out = out + rs[i].plain_text  i = i + 1 }
+    return out
+}
+
+// ---- block -> markdown ----
+
+func indent(d) {
+    s := ""
+    i := 0
+    while i < d { s = s + "  "  i = i + 1 }
+    return s
+}
+
+// first URL found in an image/file-style payload (external or hosted)
+func payload_url(pl) {
+    u, _ := json_get(pl, ".external.url")
+    u = jstr(u)
+    if u != "" && u != "null" { return u }
+    u, _ = json_get(pl, ".file.url")
+    u = jstr(u)
+    if u != "" && u != "null" { return u }
+    return ""
+}
+
+// one table_row block -> "| a | b |"; emit_sep adds the markdown separator
+// (only the table's first row gets it — rows arrive as sibling blocks)
+func table_row_md(cells, emit_sep) {
+    out := ""
+    ri := 0
+    for ri < len(cells) {
+        row := cells[ri]
+        line := "|"
+        ci := 0
+        for ci < len(row) {
+            line = line + " " + rich_md(row[ci]) + " |"
+            ci = ci + 1
+        }
+        out = out + line + "\n"
+        if emit_sep {
+            sep := "|"
+            ci = 0
+            for ci < len(row) { sep = sep + " --- |"  ci = ci + 1 }
+            out = out + sep + "\n"
+            emit_sep = false
+        }
+        ri = ri + 1
+    }
+    return out
+}
+
+// a table block's children are table_row blocks; fetch and render them with a
+// single header separator after the first row
+func nt_table_md(id) {
+    out := ""
+    cursor := ""
+    firstpage := true
+    firstrow := true
+    more := true
+    for more {
+        path := "/blocks/" + id + "/children?page_size=100"
+        if !firstpage { path = path + "&start_cursor=" + cursor }
+        firstpage = false
+        st, resp, err := nt_api("GET", path, "", 0)
+        if st != 200 || err != "" {
+            out = out + "\n\n> (Notion API error " + str(st) + ")\n"
+            more = false
+        }
+        if st == 200 {
+            results, _ := json_get(resp, ".results")
+            n := json_array_len(results)
+            i := 0
+            while i < n {
+                blk, _ := json_get(results, "[" + str(i) + "]")
+                ty, _ := json_get(blk, ".type")
+                if jstr(ty) == "table_row" {
+                    pl, _ := json_get(blk, ".table_row")
+                    rp := parse(pl, NTPayload{})
+                    out = out + table_row_md(rp.cells, firstrow)
+                    firstrow = false
+                }
+                i = i + 1
+            }
+            hm, _ := json_get(resp, ".has_more")
+            nc, _ := json_get(resp, ".next_cursor")
+            cursor = jstr(nc)
+            more = hm == "true" && cursor != "" && cursor != "null"
+        }
+    }
+    return out + "\n"
+}
+
+func nt_block_md(blk, depth) {
+    ty, _ := json_get(blk, ".type")
+    t := jstr(ty)
+    pl, _ := json_get(blk, "." + t)
+    p := parse(pl, NTPayload{})
+    ind := indent(depth)
+    txt := rich_md(p.rich_text)
+    bid, _ := json_get(blk, ".id")
+    bid = jstr(bid)
+    hasch, _ := json_get(blk, ".has_children")
+    childmd := ""
+    // tables fetch their own children (rows need one shared separator)
+    if hasch == "true" && bid != "" && t != "table" {
+        childmd = nt_children_md(bid, depth + 1)
+    }
+    out := ""
+    if t == "heading_1" { out = ind + "# " + txt + "\n\n" + childmd }
+    else if t == "heading_2" { out = ind + "## " + txt + "\n\n" + childmd }
+    else if t == "heading_3" { out = ind + "### " + txt + "\n\n" + childmd }
+    else if t == "bulleted_list_item" { out = ind + "- " + txt + "\n" + childmd }
+    else if t == "numbered_list_item" { out = ind + "1. " + txt + "\n" + childmd }
+    else if t == "to_do" {
+        mark := " "
+        if p.checked { mark = "x" }
+        out = ind + "- [" + mark + "] " + txt + "\n" + childmd
+    }
+    else if t == "toggle" { out = ind + "- " + txt + "\n" + childmd }
+    else if t == "quote" { out = ind + "> " + txt + "\n\n" + childmd }
+    else if t == "callout" { out = ind + "> " + txt + "\n\n" + childmd }
+    else if t == "code" {
+        code := plain_text(p.rich_text)
+        if ends(code, "\n") { code = substr(code, 0, len(code) - 1) }
+        out = "```" + p.language + "\n" + code + "\n```\n\n" + childmd
+    }
+    else if t == "equation" { out = "$$" + p.expression + "$$\n\n" + childmd }
+    else if t == "divider" { out = "---\n\n" + childmd }
+    else if t == "child_page" {
+        nm := p.title
+        if nm == "" { nm = txt }
+        out = ind + "**" + nm + "** *(sub-page — imported separately)*\n\n" + childmd
+    }
+    else if t == "bookmark" || t == "link_preview" {
+        cap := plain_text(p.caption)
+        if cap == "" { cap = p.url }
+        out = "[" + cap + "](" + p.url + ")\n\n" + childmd
+    }
+    else if t == "image" || t == "video" || t == "file" || t == "pdf" || t == "audio" {
+        u := payload_url(pl)
+        cap := plain_text(p.caption)
+        if u == "" { out = ind + txt + "\n\n" + childmd }
+        else if t == "image" { out = "![" + cap + "](" + u + ")\n\n" + childmd }
+        else { out = "[" + cap + "](" + u + ")\n\n" + childmd }
+    }
+    else if t == "table" {
+        if hasch == "true" && bid != "" { out = nt_table_md(bid) } else { out = childmd }
+    }
+    else if t == "table_row" { out = table_row_md(p.cells, false) + childmd }
+    else if t == "unsupported" { out = "<!-- unsupported Notion block: " + t + " -->\n\n" + childmd }
+    else if t == "column_list" || t == "column" || t == "synced_block" || t == "template" || t == "table_of_contents" || t == "breadcrumb" {
+        out = childmd
+    }
+    else { out = ind + txt + "\n\n" + childmd }
+    return out
+}
+
+// all children of a block/page id, paginated, rendered recursively
+func nt_children_md(id, depth) {
+    out := ""
+    cursor := ""
+    first := true
+    more := true
+    for more {
+        path := "/blocks/" + id + "/children?page_size=100"
+        if !first { path = path + "&start_cursor=" + cursor }
+        first = false
+        st, resp, err := nt_api("GET", path, "", 0)
+        if st != 200 || err != "" {
+            out = out + "\n\n> (Notion API error " + str(st) + ")\n"
+            more = false
+        }
+        if st == 200 {
+            results, _ := json_get(resp, ".results")
+            n := json_array_len(results)
+            i := 0
+            while i < n {
+                blk, _ := json_get(results, "[" + str(i) + "]")
+                out = out + nt_block_md(blk, depth)
+                i = i + 1
+            }
+            hm, _ := json_get(resp, ".has_more")
+            nc, _ := json_get(resp, ".next_cursor")
+            cursor = jstr(nc)
+            more = hm == "true" && cursor != "" && cursor != "null"
+        }
+    }
+    return out
+}
+
+// ---- page title from the dynamic properties object ----
+
+func notion_page_title(p) {
+    best := ""
+    for _, v := range p.properties {
+        if len(v.title) > 0 {
+            s := plain_text(v.title)
+            if s != "" { return s }
+        }
+        if len(v.rich_text) > 0 && best == "" {
+            best = plain_text(v.rich_text)
+        }
+    }
+    if best != "" { return best }
+    return "Untitled"
+}
+
+// ---- sync index: page_id -> "file_id|last_edited_time" ----
+
+func notion_index_load() {
+    m := make(map[string]string)
+    src := read_file(index_path())
+    lines := split(src, "\n")
+    i := 0
+    while i < len(lines) {
+        l := lines[i]
+        bar := index(l, "|")
+        if bar > 0 {
+            rest := substr(l, bar + 1, len(l))
+            bar2 := index(rest, "|")
+            if bar2 > 0 { m[substr(l, 0, bar)] = rest }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+func notion_index_save(m) {
+    out := ""
+    for k, v := range m { out = out + k + "|" + v + "\n" }
+    write_file(index_path(), out)
+}
+
+// ---- ISO-8601 -> epoch ms (time_make is local-time; the offset is uniform
+// across all Notion timestamps, so ordering and display stay consistent) ----
+
+func iso_ms(s) {
+    if len(s) < 19 { return now() * 1000 }
+    ds := split(substr(s, 0, 10), "-")
+    ts := split(substr(s, 11, 8), ":")
+    if len(ds) != 3 || len(ts) != 3 { return now() * 1000 }
+    y := parse_int(ds[0])
+    mo := parse_int(ds[1])
+    da := parse_int(ds[2])
+    h := parse_int(ts[0])
+    mi := parse_int(ts[1])
+    se := parse_int(ts[2])
+    ms := 0
+    if len(s) > 20 && charat(s, 20) == "." {
+        frac := substr(s, 21, len(s))
+        dig := ""
+        i := 0
+        while i < len(frac) && i < 3 {
+            c := charat(frac, i)
+            if c >= "0" && c <= "9" { dig = dig + c } else { break }
+            i = i + 1
+        }
+        while len(dig) < 3 { dig = dig + "0" }
+        ms = parse_int(dig)
+    }
+    return time_make(y, mo, da, h, mi, se) * 1000 + ms
+}
+
+// ---- orchestration ----
+
+func notion_sync_begin() {
+    if state_int("nt:sync", 0) == 1 { return }
+    if !notion_connected() { set_str("nt:err", "connect Notion first"); return }
+    set_int("nt:sync", 1)
+    set_str("nt:prog", "Starting sync…")
+    set_str("nt:err", "")
+    go notion_sync_run()
+}
+
+func notion_sync_run() {
+    idx := notion_index_load()
+    done := 0
+    changed := 0
+    cursor := ""
+    has_more := true
+    first := true
+    for has_more {
+        body := "{\"filter\":{\"property\":\"object\",\"value\":\"page\"},\"sort\":{\"direction\":\"descending\",\"timestamp\":\"last_edited_time\"},\"page_size\":100}"
+        if !first { body = body + ",\"start_cursor\":\"" + cursor + "\"" }
+        body = body + "}"
+        first = false
+        st, resp, err := nt_api("POST", "/search", body, 0)
+        if st != 200 || err != "" {
+            nt_send(4, done, "search failed (" + str(st) + ")")
+            return
+        }
+        results, _ := json_get(resp, ".results")
+        n := json_array_len(results)
+        i := 0
+        while i < n {
+            pg, _ := json_get(results, "[" + str(i) + "]")
+            p := parse(pg, NTPageS{})
+            title := notion_page_title(p)
+            ent := idx[p.id]
+            parts := split(ent, "|")
+            skip := len(parts) == 2 && parts[1] == p.last_edited_time
+            if !skip {
+                fid := str(iso_ms(p.created_time)) + "n" + substr(sha256(p.id), 0, 12)
+                md := "# " + title + "\n\n" + nt_children_md(p.id, 0)
+                if !ends(md, "\n") { md = md + "\n" }
+                md = md + "\n<!-- notion: id=" + p.id + " edited=" + p.last_edited_time + " -->\n"
+                write_file(note_path(fid), md)
+                idx[p.id] = fid + "|" + p.last_edited_time
+                changed = changed + 1
+            }
+            done = done + 1
+            nt_send(1, done, "Importing " + title)
+            i = i + 1
+        }
+        hm, _ := json_get(resp, ".has_more")
+        nc, _ := json_get(resp, ".next_cursor")
+        cursor = jstr(nc)
+        has_more = hm == "true" && cursor != "" && cursor != "null"
+    }
+    notion_index_save(idx)
+    nt_send(3, done, "Synced " + str(changed) + " page(s), " + str(done) + " seen")
+}
+
+// every frame on the main thread: apply progress, refresh caches on completion
+func notion_sync_poll() {
+    select {
+    case p := <-nt_prog_ch:
+        if p.phase == 3 {
+            set_int("nt:sync", 0)
+            set_str("nt:prog", "")
+            set_int("nv", state_int("nv", 0) + 1)
+            set_str("nt:lastsync", str(now()))
+        } else if p.phase == 4 {
+            set_int("nt:sync", 0)
+            set_str("nt:prog", "")
+            set_str("nt:err", p.msg)
+        } else {
+            set_str("nt:prog", p.msg)
+        }
+    default:
+    }
+}

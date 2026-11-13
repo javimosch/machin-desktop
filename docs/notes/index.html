@@ -32,7 +32,7 @@
   <main>
     <div class="doc">
       <div class="eyebrow">Built with mdk · dogfood</div>
-      <h1>Notes — a markdown workspace in ~650 lines of MFL</h1>
+      <h1>Notes — a markdown workspace in ~1,300 lines of MFL</h1>
       <p class="lead">A micro-SaaS-style dashboard for personal markdown notes: a greeting with your nickname, stats, recent notes, a searchable list, an editor with a live preview, and settings. Every note is a plain <code>.md</code> file on your disk.</p>
       <pre><code>./mdk dev apps/notes          # hack on it with hot reload
 ./mdk build apps/notes -o notes && ./notes   # 2.6 MB binary</code></pre>
@@ -59,16 +59,31 @@
       <h2>Where your notes live</h2>
       <pre><code>~/.local/share/mdk-notes/         # or $MDK_NOTES_DIR
 ├── profile.txt                   # nickname=…  accent=…
+├── notion.json                   # Notion tokens, mode 600 (after Connect)
+├── notion-index.txt              # page_id → file_id + last_edited_time
 └── notes/
     ├── 1794566957208.md          # one file per note; the name is its creation time (ms)
-    └── 1794567010748.md</code></pre>
+    └── 1794569119000n666ff6ccaa5b.md   # imported: &lt;created-ms&gt;n&lt;hash(page_id)&gt;</code></pre>
       <p>The title is the note's first line (leading <code>#</code>s stripped). Titles, word counts and snippets are cached in the host state store and refreshed on save, so the list never re-reads every file.</p>
+
+      <h2>Import from Notion</h2>
+      <p>Settings → <b>Connect Notion</b> runs a real OAuth login — one click, no tokens to paste:</p>
+      <ol>
+        <li>The app binds a loopback listener, generates a PKCE verifier/challenge and asks the <a href="https://notes-auth.intrane.fr">notes-auth broker</a> for the authorize URL (<code>/notion/start?format=json</code>).</li>
+        <li><code>xdg-open</code> opens Notion's consent page; you pick the pages to share.</li>
+        <li>Notion redirects to the broker, which exchanges the code with the client secret (which never leaves the server) and bounces your browser to <code>http://127.0.0.1:&lt;port&gt;/cb?nonce=…</code> — the token never appears in a URL.</li>
+        <li>The app claims the token once (<code>POST /notion/claim</code> with the verifier), stores it owner-only in <code>notion.json</code>, and starts the first sync automatically.</li>
+      </ol>
+      <p>Sync searches every page shared with the integration, fetches each page's blocks recursively (headings, lists, to-dos, quotes, callouts, toggles, code, tables, child pages, links — inline <b>bold</b>/<i>italic</i>/<code>code</code>/strikethrough too), and writes one markdown note per page with a <code>&lt;!-- notion: id=… edited=… --&gt;</code> trailer. Re-sync skips pages whose <code>last_edited_time</code> is unchanged, so it's cheap to run often. Requests are paced under Notion's ~3 req/s limit, expired tokens refresh through the broker, and everything runs on a background goroutine while the UI shows progress.</p>
+      <p>The broker is a ~350-line Go sidecar (<a href="https://github.com/javimosch/machin-desktop/tree/master/broker/notion-auth"><code>broker/notion-auth</code></a>) deployed on dk1 behind Traefik; pending logins live in memory for 5 minutes and tokens are single-use.</p>
 
       <h2>How it's built</h2>
       <table>
         <tr><th>file</th><th>what</th></tr>
         <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/app.src"><code>apps/notes/app.src</code></a></td><td>the UI: sidebar, home, notes (list + editor + preview), settings</td></tr>
         <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/data.src"><code>apps/notes/data.src</code></a></td><td>storage: list / read / write <code>.md</code> files, titles, snippets, word counts, profile</td></tr>
+        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/notion.src"><code>apps/notes/notion.src</code></a></td><td>Notion connect: PKCE login via the broker, loopback listener, token file</td></tr>
+        <tr><td><a href="https://github.com/javimosch/machin-desktop/blob/master/apps/notes/notion_sync.src"><code>apps/notes/notion_sync.src</code></a></td><td>Notion import: page search, recursive blocks, markdown conversion, re-sync</td></tr>
         <tr><td><code>apps/notes/app.conf</code></td><td><code>title=Notes</code> · <code>size=1180x760</code></td></tr>
       </table>
       <p>It uses only the public framework: <code>scroll_view</code>, <code>text_field</code>, <code>text_area</code>, <code>md_view</code>, <code>card</code>, <code>nav_item</code>, <code>list_item</code>, <code>avatar</code>, <code>badge</code>, <code>button</code> — see the <a href="../api/">API</a>.</p>
@@ -85,9 +100,9 @@
 
       <h2>Next</h2>
       <ul>
-        <li><b>Import from Notion</b> — Notion's “Markdown &amp; CSV” export is a zip of <code>.md</code> files: unpack, map each page to a note, keep sub-pages as links.</li>
         <li>Text selection, soft-wrapped editing, inline <b>bold</b> / <code>code</code> / links in the preview.</li>
         <li>Tags and pinning, from front-matter in the <code>.md</code> files.</li>
+        <li>Two-way Notion sync (push edits back), and importing Notion databases as tables.</li>
       </ul>
     </div>
 

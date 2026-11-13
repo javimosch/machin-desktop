@@ -1,0 +1,246 @@
+// notion.src — "Connect Notion" via the notes-auth broker. The Notion client
+// secret never leaves the broker; the app proves it started a login with a
+// PKCE-style challenge and claims the resulting token exactly once.
+//
+//   view() -> notion_begin() -> GET broker/notion/start?format=json
+//        -> xdg-open <authorize url>  +  loopback listener already running
+//   Notion -> broker /notion/cb -> 302 http://127.0.0.1:<port>/cb?nonce=N
+//   view() drains nt_ch -> notion_claim(nonce) -> POST /notion/claim
+//        -> token JSON -> ~/.local/share/mdk-notes/notion.json (mode 600)
+//
+// The loopback listener binds once at boot and lives for the app's lifetime,
+// so there is no fd lifecycle to race: every callback is one HTTP request on
+// one goroutine, and nonces go to the view over nt_ch (channels deep-copy
+// strings across goroutines; the host state store is main-thread only).
+
+type NTToken struct {
+    access_token string
+    refresh_token string
+    workspace_name string
+}
+
+type NTStart struct {
+    url string
+    nonce string
+}
+
+var nt_ch = make(chan string)
+
+func broker_url() { return "https://notes-auth.intrane.fr" }
+
+func token_path() { return data_dir() + "/notion.json" }
+
+func index_path() { return data_dir() + "/notion-index.txt" }
+
+// base64url without padding, for the PKCE verifier/challenge pair.
+func b64url(bs) {
+    s := base64_encode_bytes(bs)
+    s = replace(s, "+", "-")
+    s = replace(s, "/", "_")
+    while ends(s, "=") { s = substr(s, 0, len(s) - 1) }
+    return s
+}
+
+func notion_token() {
+    src := read_file(token_path())
+    if src == "" { return NTToken{} }
+    return parse(src, NTToken{})
+}
+
+// " · <workspace>" for the settings line; the token file is read once at boot
+// and on claim, not every frame.
+func notion_ws_suffix() {
+    ws := state_str("nt:ws", "")
+    if ws == "" { return "" }
+    return " · " + ws
+}
+
+func notion_connected() { return state_str("nt:ws", "") != "" }
+
+func notion_refresh_state() {
+    tok := notion_token()
+    if tok.access_token == "" {
+        set_str("nt:ws", "")
+    } else {
+        set_str("nt:ws", tok.workspace_name)
+        if tok.workspace_name == "" { set_str("nt:ws", "connected") }
+    }
+}
+
+// ---- loopback listener (one per app run, spawned from boot on the main thread)
+func notion_listen_boot() {
+    if state_int("_ntlisten", 0) == 1 { return }
+    set_int("_ntlisten", 1)
+    fd := -1
+    p := 17897
+    while p < 17920 && fd < 0 {
+        fd = listen_on("127.0.0.1", p)
+        if fd >= 0 { set_int("nt:port", p) }
+        p = p + 1
+    }
+    if fd < 0 {
+        set_str("nt:err", "could not bind a loopback port")
+        return
+    }
+    go notion_accept_loop(fd)
+}
+
+func notion_accept_loop(fd) {
+    for {
+        conn := accept(fd)
+        if conn <= 0 { sleep(100) }
+        if conn > 0 {
+        socket_timeout(conn, 10000)
+        raw := ""
+        while index(raw, "\r\n\r\n") < 0 && len(raw) < 16384 {
+            chunk := read(conn)
+            if chunk == "" { break }
+            raw = raw + chunk
+        }
+        nonce := ""
+        sp1 := index(raw, " ")
+        if sp1 >= 0 {
+            rest := substr(raw, sp1 + 1, len(raw))
+            sp2 := index(rest, " ")
+            if sp2 >= 0 {
+                path := substr(rest, 0, sp2)
+                np := index(path, "nonce=")
+                if np >= 0 {
+                    tail := substr(path, np + 6, len(path))
+                    amp := index(tail, "&")
+                    if amp >= 0 { nonce = substr(tail, 0, amp) } else { nonce = tail }
+                }
+            }
+        }
+        page := "<!doctype html><meta charset=utf-8><title>Notes</title><body style=\"font:16px system-ui;background:#16161a;color:#ededf2;display:grid;place-items:center;height:100vh;margin:0\"><div><h2>You're connected</h2><p style=\"color:#9a9aa8\">You can close this tab and go back to Notes.</p></div>"
+        if nonce == "" { page = "<!doctype html><meta charset=utf-8><title>Notes</title><body style=\"font:16px system-ui;background:#16161a;color:#ededf2;display:grid;place-items:center;height:100vh;margin:0\"><div><h2>Nothing to do here</h2><p style=\"color:#9a9aa8\">Start the login from the Notes app.</p></div>" }
+        head := "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + str(len(page)) + "\r\nConnection: close\r\n\r\n"
+        write(conn, head + page)
+        close(conn)
+        if nonce != "" { nt_ch <- nonce }
+        }
+    }
+}
+
+// ---- connect flow, driven from view() on the main thread
+func notion_begin() {
+    if state_int("nt:flow", 0) == 1 { return }
+    port := state_int("nt:port", 0)
+    if port == 0 { set_str("nt:err", "loopback listener not running"); return }
+    vb := rand_bytes(32)
+    verifier := b64url(vb)
+    challenge := b64url(sha256_bytes(bytes(verifier)))
+    set_str("nt:verifier", verifier)
+    set_int("nt:flow", 1)
+    set_int("nt:t0", now_ms())
+    set_str("nt:err", "")
+    u := broker_url() + "/notion/start?port=" + str(port) + "&challenge=" + challenge + "&format=json"
+    st, body, err := http_get(u)
+    if err != "" || st != 200 {
+        set_int("nt:flow", 0)
+        set_str("nt:err", "could not reach the auth broker")
+        return
+    }
+    r := parse(body, NTStart{})
+    if r.url == "" {
+        set_int("nt:flow", 0)
+        set_str("nt:err", "broker returned no authorize URL")
+        return
+    }
+    _, _, _ := exec("xdg-open '" + r.url + "'")
+}
+
+func notion_claim(nonce) {
+    verifier := state_str("nt:verifier", "")
+    body := "{\"nonce\":\"" + nonce + "\",\"verifier\":\"" + verifier + "\"}"
+    h := []string{"Content-Type: application/json"}
+    st, resp, err := http_request("POST", broker_url() + "/notion/claim", h, body)
+    set_int("nt:flow", 0)
+    if st == 409 {
+        // consent not finished yet — keep the verifier, stay in flow
+        set_int("nt:flow", 1)
+        set_int("nt:t0", now_ms())
+        return
+    }
+    if err != "" || st != 200 {
+        set_str("nt:err", "claim failed (" + str(st) + ")")
+        return
+    }
+    tok := parse(resp, NTToken{})
+    if tok.access_token == "" {
+        set_str("nt:err", "broker returned no token")
+        return
+    }
+    write_file(token_path(), json(tok))
+    _, _, _ := exec("chmod 600 '" + token_path() + "'")
+    set_str("nt:ws", tok.workspace_name)
+    if tok.workspace_name == "" { set_str("nt:ws", "connected") }
+    set_str("nt:err", "")
+    set_int("nt:autosync", 1)
+}
+
+// every frame: drain the callback channel, expire stale flows
+func notion_poll() {
+    select {
+    case nonce := <-nt_ch:
+        notion_claim(nonce)
+    default:
+    }
+    if state_int("nt:flow", 0) == 1 && now_ms() - state_int("nt:t0", 0) > 300000 {
+        set_int("nt:flow", 0)
+        set_str("nt:err", "login expired — try Connect Notion again")
+    }
+    if state_int("nt:autosync", 0) == 1 {
+        set_int("nt:autosync", 0)
+        notion_sync_begin()
+    }
+}
+
+func notion_disconnect() {
+    remove(token_path())
+    remove(index_path())
+    set_str("nt:ws", "")
+    set_str("nt:err", "")
+    set_str("nt:prog", "")
+}
+
+// the Settings page card: connect / sync / disconnect + progress
+func notion_settings_card() {
+    card()
+    width(620.0)
+    gap(12.0)
+        text("Notion", 17.0)
+        bold()
+        if notion_connected() {
+            text("Connected" + notion_ws_suffix() + " — pages import as markdown notes.", 14.0)
+            fg(C_MUTED)
+            row()
+            fillw()
+            align(A_CENTER)
+            gap(10.0)
+                if button("Sync now") { notion_sync_begin() }
+                if state_int("nt:sync", 0) == 1 {
+                    text(state_str("nt:prog", "Syncing…"), 13.0)
+                    fg(C_ACCENT)
+                } else {
+                    ls := state_str("nt:lastsync", "")
+                    if ls != "" { text("last sync " + ago(int(parse_float(ls))), 12.0)  fg(0x6A6A78FF) }
+                }
+                if button_ghost("Disconnect") { notion_disconnect() }
+            end()
+        } else {
+            text("Import pages from a Notion workspace you share with the integration.", 14.0)
+            fg(C_MUTED)
+            if state_int("nt:flow", 0) == 1 {
+                text("Finish in your browser — this window will update when you're done.", 13.0)
+                fg(C_ACCENT)
+            } else if button("Connect Notion") {
+                notion_begin()
+            }
+        }
+        if state_str("nt:err", "") != "" {
+            text(state_str("nt:err", ""), 13.0)
+            fg(C_DANGER)
+        }
+    end()
+}

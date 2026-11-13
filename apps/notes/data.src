@@ -99,30 +99,34 @@ func word_count(src) {
     return w
 }
 
-// cached title / word count, filled from disk on first use
+// cached title / word count, filled from disk on first use. Keys carry the
+// notes-version counter (bumped after a Notion sync rewrites files) so stale
+// entries are simply never read again.
+func ckey(p, id) { return p + str(state_int("nv", 0)) + ":" + id }
+
 func cache_note(id, src) {
-    set_str("t:" + id, title_of(src))
-    set_int("w:" + id, word_count(src))
-    set_str("s:" + id, snippet_of(src, 140))
+    set_str(ckey("t", id), title_of(src))
+    set_int(ckey("w", id), word_count(src))
+    set_str(ckey("s", id), snippet_of(src, 140))
 }
 
 func note_title(id) {
-    t := state_str("t:" + id, "")
+    t := state_str(ckey("t", id), "")
     if t == "" {
         cache_note(id, read_file(note_path(id)))
-        t = state_str("t:" + id, "Untitled")
+        t = state_str(ckey("t", id), "Untitled")
     }
     return t
 }
 
 func note_words(id) {
     note_title(id)
-    return state_int("w:" + id, 0)
+    return state_int(ckey("w", id), 0)
 }
 
 func note_snippet(id) {
     note_title(id)
-    return state_str("s:" + id, "")
+    return state_str(ckey("s", id), "")
 }
 
 func save_note(id, src) {

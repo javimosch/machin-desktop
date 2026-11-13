@@ -132,7 +132,14 @@ func (b *broker) start(w http.ResponseWriter, r *http.Request) {
 		"redirect_uri":  {b.redirect},
 		"state":         {nonce},
 	}
-	http.Redirect(w, r, notionAuth+"?"+q.Encode(), http.StatusFound)
+	authURL := notionAuth + "?" + q.Encode()
+	// Desktop apps can't read a 302's Location header through Machin's
+	// http_get, so ?format=json hands them the URL to open directly.
+	if r.URL.Query().Get("format") == "json" {
+		writeJSON(w, 200, map[string]string{"url": authURL, "nonce": nonce})
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 // GET /notion/cb?code=…&state=…  (or ?error=… when the user declined)

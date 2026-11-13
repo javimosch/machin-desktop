@@ -1,6 +1,6 @@
 # Notes — the mdk dogfood app
 
-A micro-SaaS-style desktop dashboard for personal markdown notes, built with mdk in MFL (apps/notes: ~650 lines of MFL on top of the framework).
+A micro-SaaS-style desktop dashboard for personal markdown notes, built with mdk in MFL (apps/notes: ~1,300 lines of MFL on top of the framework), including a Notion importer.
 
 ```
 ./mdk dev apps/notes
@@ -13,23 +13,44 @@ A micro-SaaS-style desktop dashboard for personal markdown notes, built with mdk
 - Notes: searchable list (titles + contents), editor (text_area) with Edit / Split / Preview modes, live md_view preview, two-step delete
 - Autosave: every edit writes the note's .md file
 - Settings: nickname (text_field) with generated avatar, accent color swatches theming the app, storage path
+- Notion: Connect Notion (OAuth via broker), Sync now, Disconnect, live progress
 - Shortcuts: ctrl+n new note, ctrl+v paste, ctrl+Backspace delete word, Esc leaves a field
+
+## Notion import
+
+Settings → Connect Notion runs OAuth against the notes-auth broker (https://notes-auth.intrane.fr, Go sidecar in broker/notion-auth on dk1):
+
+1. App binds a loopback listener (127.0.0.1:17897+) and calls /notion/start?format=json with a PKCE challenge
+2. xdg-open opens Notion consent; user picks pages
+3. Broker exchanges the code server-side (client secret never in the app) and redirects the browser to 127.0.0.1:<port>/cb?nonce=N — token never in a URL
+4. App POSTs /notion/claim {nonce, verifier} → token JSON once → notion.json (mode 600) → auto-sync
+
+Sync (background goroutine, ~2.5 req/s): POST /v1/search (shared pages) → per page GET /v1/blocks/{id}/children recursively → markdown (headings, lists, todos, quotes, callouts, toggles, code, tables, child pages, links, inline bold/italic/code/strike) → one .md per page named <created-ms>n<sha256(page_id)[:12]>.md with a <!-- notion: id=… edited=… --> trailer. notion-index.txt maps page_id → file_id|last_edited_time; unchanged pages are skipped on re-sync. Token refresh goes through broker /notion/refresh (secret stays server-side).
+
+Env hooks for testing: MDK_NOTES_DIR (data dir), MDK_NOTES_SYNC=1 (sync on boot), MDK_NOTES_CONNECT=1 (start OAuth on boot), MDK_NOTION_API (override API base, e.g. http://127.0.0.1:8399/v1 for the mock). Mock server: apps/notes/mock_notion.py.
 
 ## Storage
 
 ```
 $MDK_NOTES_DIR (default ~/.local/share/mdk-notes)/
   profile.txt            nickname=... / accent=<rgba int>
+  notion.json            Notion tokens, mode 600 (after Connect)
+  notion-index.txt       page_id|file_id|last_edited_time per line
   notes/<created-ms>.md  one file per note; title = first line without leading #
+  notes/<created-ms>n<hash>.md  imported Notion pages
 ```
 
-Titles / word counts / snippets cached in the host state store (t:<id>, w:<id>, s:<id>) and refreshed on save.
+Titles / word counts / snippets cached in the host state store, versioned by a counter bumped after each sync (nv).
 
 ## Files
 
 - apps/notes/app.src — UI (sidebar, home, notes, settings)
 - apps/notes/data.src — storage (list_dir/read_file/write_file/remove), title/snippet/word count, profile
+- apps/notes/notion.src — OAuth connect flow, loopback listener, token store
+- apps/notes/notion_sync.src — Notion API client, block→markdown, sync orchestration
+- apps/notes/mock_notion.py — mock Notion API for offline importer testing
 - apps/notes/app.conf — title=Notes, size=1180x760
+- broker/notion-auth/ — the OAuth broker (Go, deployed on dk1 as notes-auth.intrane.fr)
 
 ## Verify it like an agent
 
@@ -39,17 +60,28 @@ MDK_NOTES_DIR=/tmp/notes-test ./mdk shot apps/notes /tmp/n.ppm --frames 4 \
 convert /tmp/n.ppm /tmp/n.png && cat /tmp/notes-test/notes/*.md
 ```
 
-(window coordinates at 1180x760: sidebar "Notes" = 69,146; "+ New" = 478,36; editor first line ~ 640,98)
+(window coordinates at 1180x760: sidebar "Notes" = 69,146; "+ New" = 478,36; editor first line ~ 640,98; sidebar "Settings" ≈ 100,205)
+
+Importer against the mock:
+
+```
+python3 apps/notes/mock_notion.py &   # serves /v1/search + /v1/blocks/*/children on :8399
+printf '{"access_token":"t","refresh_token":"r","workspace_name":"Test"}' > /tmp/mdk-nt/notion.json
+MDK_NOTES_DIR=/tmp/mdk-nt MDK_NOTION_API=http://127.0.0.1:8399/v1 MDK_NOTES_SYNC=1 ./mdk dev apps/notes
+cat /tmp/mdk-nt/notes/*.md /tmp/mdk-nt/notion-index.txt
+```
 
 ## Found by dogfooding
 
 - needed text input, focus, clipping, scroll views, overlays (built for it)
 - fixed a use-after-free: set_str(k, state_str(k)) freed the slot before copying; state strings are now per-frame copies
 - grow() now has a zero basis (CSS flex: 1); growing row children are measured at the width they will get
+- json_get returns raw JSON tokens: booleans come back unquoted (`true`), so compare them directly — parse(tok, "") only decodes string tokens
+- mdk now links -lssl -lcrypto when the emitted C uses OpenSSL (https_*/wss_*/crypto builtins), for both dev .so and release builds
 
 ## Next
 
-Notion import (Notion "Markdown & CSV" export = zip of .md files), text selection, soft-wrap editing, inline marks in preview, tags/pinning via front-matter.
+Two-way Notion sync (push edits back), Notion databases as tables, text selection, soft-wrap editing, inline marks in preview, tags/pinning via front-matter.
 
 ---
 HTML: https://javimosch.github.io/machin-desktop/notes/ · site index: https://javimosch.github.io/machin-desktop/llms.txt
