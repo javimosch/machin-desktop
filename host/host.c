@@ -333,7 +333,20 @@ int64_t mdk_mouse_pressed(void) { return g_mpressed; }
 int64_t mdk_mouse_released(void) { return g_mreleased; }
 int64_t mdk_key_pressed(int64_t sc) { return (sc >= 0 && sc < 512) ? g_keys[sc] : 0; }
 double mdk_time(void) { return (double)SDL_GetTicksNS() / 1e9 - g_t0; }
-void mdk_animate(void) { g_anim = 1; }
+// Wake the frame loop from any thread. A release build sleeps in
+// SDL_WaitEventTimeout(-1) while idle and g_anim alone cannot interrupt a
+// wait already in progress; pushing a user event makes it return so one
+// more frame renders (any event marks the frame dirty). SDL_PushEvent is
+// thread-safe; the event type is allocated once at startup.
+static Uint32 g_wake_ev;
+void mdk_wake(void) {
+    if (!g_wake_ev) return;
+    SDL_Event e;
+    memset(&e, 0, sizeof e);
+    e.type = (SDL_EventType)g_wake_ev;
+    SDL_PushEvent(&e);
+}
+void mdk_animate(void) { g_anim = 1; mdk_wake(); }
 
 // Text typed this frame (UTF-8, IME-composed by SDL), modifier state,
 // clipboard, the pointer's shape, and the window's title/size.
@@ -767,6 +780,7 @@ int main(int argc, char** argv) {
 #endif
     double t_start = (double)SDL_GetTicksNS();
     if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "mdk: SDL_Init: %s\n", SDL_GetError()); return 1; }
+    g_wake_ev = SDL_RegisterEvents(1);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
