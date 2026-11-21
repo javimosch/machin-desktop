@@ -42,6 +42,7 @@ extern "mdk" {
     fn mdk_wheel() f32
     fn mdk_time() f64
     fn mdk_animate()
+    fn mdk_wake()
     fn mdk_el_buf() int
     fn mdk_prev_buf() int
     fn mdk_prev_n() int
@@ -464,6 +465,9 @@ func fmt2(v) {
 
 func frame_no() { return mdk_frame_no() }
 func animate() { mdk_animate() }
+// ask for one more frame, from any thread — safe to call off the UI thread
+// (e.g. a reader goroutine) while the app is idle-asleep
+func wake() { mdk_wake() }
 
 // ---- window ----
 func window_title(s) { mdk_set_title(s) }

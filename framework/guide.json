@@ -357,6 +357,11 @@
           "name": "animate",
           "sig": "animate()",
           "summary": "ask for another frame right away (otherwise the app sleeps until input)"
+        },
+        {
+          "name": "wake",
+          "sig": "wake()",
+          "summary": "ask for one more frame; thread-safe, so worker goroutines can wake an idle app (e.g. a socket reader)"
         }
       ]
     },
